@@ -1,0 +1,26 @@
+---
+description: Công nghệ frontend - phải tuân thủ
+globs: frontend/**/*
+alwaysApply: false
+---
+
+# Frontend - Stack bắt buộc
+
+Khi làm trong `frontend/`, dùng đúng stack sau:
+
+- **Framework:** Next.js 15 (App Router), React 19, TypeScript
+- **State:** TanStack Query + Redux Toolkit (RTK)
+- **HTTP:** Axios
+- **WebSocket:** Socket.IO (socket.io-client)
+- **Styling:** Tailwind CSS
+- **Charts:** Lightweight Charts hoặc Highcharts
+
+## Ví dụ
+
+```tsx
+// Gọi API với Axios trong TanStack Query
+const { data } = useQuery({
+  queryKey: ['stocks'],
+  queryFn: () => axios.get('/api/stocks').then(r => r.data),
+});
+```

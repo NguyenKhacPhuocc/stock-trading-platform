@@ -1,0 +1,24 @@
+---
+description: Công nghệ backend - phải tuân thủ
+globs: backend/**/* 
+alwaysApply: false
+---
+# Backend - Stack bắt buộc
+
+Khi làm trong `backend/`, dùng đúng stack sau:
+
+- **Framework:** NestJS, TypeScript
+- **Database:** PostgreSQL (Docker port **5433**) + TypeORM
+- **Cache:** Redis (node-redis)
+- **WebSocket:** Socket.IO
+- **Auth:** JWT + HTTP-only cookie
+
+## Cấu trúc DB
+
+- Entities đặt tại `src/database/entities/`
+- Mỗi module import entity qua `TypeOrmModule.forFeature([...])`
+- `DatabaseModule` (global) ở `src/database/database.module.ts` — **không** import lại TypeOrmModule.forRoot ở nơi khác
+
+## Module NestJS cần có
+
+AuthModule, UserModule, OrderModule, MarketModule, WalletModule, TradesModule, WatchlistModule, NotificationsModule, AdminModule, AiModule (xem chi tiết trong DO-AN-SAN-CHUNG-KHOAN-TECH-SPEC.md)

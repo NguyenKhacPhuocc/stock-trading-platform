@@ -1,0 +1,32 @@
+---
+description: Ngữ cảnh dự án - đồ án sàn chứng khoán trực tuyến
+alwaysApply: true
+---
+
+# Dự án: Sàn giao dịch chứng khoán trực tuyến
+
+## Nguồn thông tin chính
+
+**ĐỌC FILE NÀY KHI TRIỂN KHAI:** `DO-AN-SAN-CHUNG-KHOAN-TECH-SPEC.md` (ở root project).
+
+File này chứa: yêu cầu đề tài, công nghệ, kiến trúc, chức năng, database, API, lộ trình. Mọi quyết định triển khai phải dựa trên spec.
+
+## Folder structure
+
+├── frontend/     (Next.js)
+├── backend/      (NestJS)
+├── ai-service/   (FastAPI)
+
+## Màu sắc thương hiệu
+
+- **Màu chủ đạo (primary):** `#21CE3C` — xanh lá, dùng cho button, link, highlight chính
+- **Primary dark:** `#1aad32` — dùng cho hover/active state
+- Định nghĩa tại: `apps/trade/src/app/globals.css` và `apps/www/src/app/globals.css` qua biến `--primary`
+- Trong code luôn dùng `var(--primary)` hoặc class Tailwind `bg-primary`, `text-primary`
+
+## Tóm tắt nhanh
+
+- **Đề tài:** Website giao dịch chứng khoán VN mô phỏng (SSI, DSC...), môi trường giả lập
+- **Phân hệ:** Người dùng, Dữ liệu & giao dịch, AI, Quản trị
+- **Stack:** Next.js 15, TanStack Query + Redux RTK, Axios, Socket.IO, Tailwind, NestJS, PostgreSQL, Prisma, Redis
+- **Monolith:** Không dùng microservice, Kafka, RabbitMQ

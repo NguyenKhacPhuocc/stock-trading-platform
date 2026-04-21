@@ -1,0 +1,15 @@
+{
+  "name": "stock-trading-platform",
+  "private": true,
+  "packageManager": "npm@10.9.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "dev:www": "turbo dev --filter=www",
+    "dev:trade": "turbo dev --filter=trade"
+  },
+  "devDependencies": {
+    "turbo": "latest"
+  }
+}

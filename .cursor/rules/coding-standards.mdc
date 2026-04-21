@@ -1,0 +1,34 @@
+---
+description: Tiêu chuẩn code - sạch, gọn, production-ready
+alwaysApply: true
+---
+
+# Coding Standards
+
+## Nguyên tắc chung
+
+- **Đơn giản, hiệu quả**: Code ngắn gọn, dễ đọc, giải quyết đúng yêu cầu.
+- **Không thừa**: Không code trùng lặp, không chức năng không dùng, không biến/hàm dư.
+- **Production-ready**: Xử lý lỗi, kiểm tra input, bảo mật cơ bản; code sẵn sàng dùng thật.
+
+## Comment
+
+- **Tiếng Việt**, dễ hiểu cho người đọc.
+- Chỉ comment logic phức tạp, quyết định nghiệp vụ.
+- **Không**: Comment hiển nhiên, comment từng dòng, comment mô tả lại code.
+- **Không**: Tự ý thêm file md.
+- **Ví dụ**:
+  - ❌ `// Tăng i lên 1` 
+  - ✅ `// ATO chỉ khớp khi có phiên mở cửa, bỏ qua nếu chưa có session`
+
+## Cấu trúc code
+
+- Mỗi hàm/component làm **một việc** rõ ràng.
+- Tránh hàm quá dài; tách ra nếu logic phức tạp.
+- Đặt tên biến, hàm, file **có nghĩa**, nhất quán.
+- Format thống nhất (Prettier/ESLint) và không có code bị comment cũ.
+
+## DRY & tái sử dụng
+
+- Không copy-paste logic: extract thành hàm/hook/util dùng chung.
+- Const, enum, config dùng chung đặt một nơi.
