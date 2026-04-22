@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import { Stock } from '../../database/entities/stock.entity';
 import { CreateStockDto } from './dto/create-stock.dto';
 import { MarketService } from '../market/market.service';
+import { DEFAULT_STOCK_BOARD_ID } from '../../common/const';
 
 @Injectable()
 export class StocksService {
@@ -21,7 +22,13 @@ export class StocksService {
 
   async create(dto: CreateStockDto) {
     const symbol = dto.symbol.trim().toUpperCase();
-    const existing = await this.stockRepo.findOne({ where: { symbol } });
+    const boardId =
+      dto.boardId != null && dto.boardId !== ''
+        ? dto.boardId.trim()
+        : DEFAULT_STOCK_BOARD_ID;
+    const existing = await this.stockRepo.findOne({
+      where: { symbol, boardId },
+    });
     if (existing) {
       throw new ConflictException(`Mã ${symbol} đã tồn tại`);
     }
@@ -31,6 +38,7 @@ export class StocksService {
 
     const stock = this.stockRepo.create({
       symbol,
+      boardId,
       name: dto.name.trim(),
       exchange: dto.exchange,
       ceilPct,
@@ -48,14 +56,14 @@ export class StocksService {
 
   findAll() {
     return this.stockRepo.find({
-      where: { isActive: true },
+      where: { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
       order: { symbol: 'ASC' },
     });
   }
 
-  async findBySymbol(symbol: string) {
+  async findBySymbol(symbol: string, boardId = DEFAULT_STOCK_BOARD_ID) {
     const stock = await this.stockRepo.findOne({
-      where: { symbol: symbol.toUpperCase() },
+      where: { symbol: symbol.toUpperCase(), boardId },
     });
     if (!stock) throw new NotFoundException(`Không tìm thấy mã ${symbol}`);
     return stock;

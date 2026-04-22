@@ -15,6 +15,7 @@ import {
   CacheTtl,
   marketQuotesCacheKey,
   CACHE_TTL_MARKET_QUOTES,
+  DEFAULT_STOCK_BOARD_ID,
 } from '../../common/const';
 import { RedisService } from '../../redis/redis.service';
 import { roundToTick, toNum } from './market-price.util';
@@ -61,8 +62,12 @@ export class MarketService {
 
     const stocks = await this.stockRepo.find({
       where: where
-        ? where.map((symbol) => ({ symbol, isActive: true }))
-        : { isActive: true },
+        ? where.map((symbol) => ({
+            symbol,
+            boardId: DEFAULT_STOCK_BOARD_ID,
+            isActive: true,
+          }))
+        : { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
       order: { symbol: 'ASC' },
     });
 
@@ -138,8 +143,12 @@ export class MarketService {
 
     const stocks = await this.stockRepo.find({
       where: ex
-        ? { isActive: true, exchange: ex as Exchange }
-        : { isActive: true },
+        ? {
+            isActive: true,
+            boardId: DEFAULT_STOCK_BOARD_ID,
+            exchange: ex as Exchange,
+          }
+        : { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
       order: { symbol: 'ASC' },
     });
     if (stocks.length === 0) {
@@ -191,7 +200,12 @@ export class MarketService {
 
   async getPriceHistory(symbol: string, limit = 100) {
     return this.priceRepo.find({
-      where: { stock: { symbol: symbol.toUpperCase() } },
+      where: {
+        stock: {
+          symbol: symbol.toUpperCase(),
+          boardId: DEFAULT_STOCK_BOARD_ID,
+        },
+      },
       relations: { stock: true },
       order: { date: 'DESC' },
       take: limit,

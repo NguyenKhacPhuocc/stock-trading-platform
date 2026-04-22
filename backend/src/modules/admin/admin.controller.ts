@@ -66,4 +66,10 @@ export class AdminController {
   setConfig(@Param('key') key: string, @Body() dto: SetConfigDto) {
     return this.admin.setConfig(key, dto.value, dto.description);
   }
+
+  @Post('market/snapshot/refresh')
+  @HttpCode(HttpStatus.OK)
+  forceRefreshMarketSnapshot() {
+    return this.admin.forceRefreshMarketSnapshot();
+  }
 }

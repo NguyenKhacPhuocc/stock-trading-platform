@@ -9,10 +9,13 @@ import {
   Unique,
 } from 'typeorm';
 import { Stock } from './stock.entity';
+import { MarketSnapshotSource } from '../../common/const';
 
 /**
  * Snapshot bảng giá theo ngày giao dịch — một dòng / mã / ngày.
- * API instruments đọc từ đây; cập nhật khi lệnh thay đổi & khi có khớp (trade).
+ * Đầu ngày: seed từ SSI (TC/trần/sàn, metadata tham chiếu).
+ * Trong phiên: engine mô phỏng có thể cập nhật depth/khớp nội bộ vào cùng snapshot
+ * để người dùng theo dõi một dòng dữ liệu liên tục trong hệ thống.
  */
 @Entity('stock_board_snapshots')
 @Unique(['stockId', 'tradingDate'])
@@ -184,6 +187,42 @@ export class StockBoardSnapshot {
 
   @Column({ name: 'total_offer_qty', type: 'int', default: 0 })
   totalOfferQty: number;
+
+  /** varchar để tránh trùng enum PG với `market_snapshot_ingests.source` */
+  @Column({
+    name: 'ingest_source',
+    type: 'varchar',
+    length: 32,
+    default: MarketSnapshotSource.SSI,
+  })
+  ingestSource: MarketSnapshotSource;
+
+  @Column({ name: 'ingested_at', type: 'timestamptz', nullable: true })
+  ingestedAt: Date | null;
+
+  @Column({ name: 'raw_payload', type: 'jsonb', nullable: true })
+  rawPayload: Record<string, unknown> | null;
+
+  @Column({ name: 'session_code', type: 'varchar', length: 32, nullable: true })
+  sessionCode: string | null;
+
+  @Column({
+    name: 'price_change',
+    type: 'numeric',
+    precision: 18,
+    scale: 4,
+    nullable: true,
+  })
+  priceChange: number | null;
+
+  @Column({
+    name: 'price_change_pct',
+    type: 'numeric',
+    precision: 12,
+    scale: 6,
+    nullable: true,
+  })
+  priceChangePct: number | null;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;

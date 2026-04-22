@@ -23,6 +23,12 @@ export class CreateStockDto {
   @IsEnum(Exchange)
   exchange: Exchange;
 
+  /** Mặc định MAIN — khớp SSI `boardId` */
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  boardId?: string;
+
   @IsOptional()
   @IsNumber()
   @Min(0)

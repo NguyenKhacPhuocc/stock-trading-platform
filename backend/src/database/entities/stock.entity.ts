@@ -6,25 +6,41 @@ import {
   UpdateDateColumn,
   OneToMany,
   Index,
+  Unique,
 } from 'typeorm';
 import { Order } from './order.entity';
 import { Position } from './position.entity';
 import { PriceHistory } from './price-history.entity';
 import { AIAnalysis } from './ai-analysis.entity';
 import { WatchlistItem } from './watchlist-item.entity';
-import { Exchange } from '../../common/const';
+import { Exchange, DEFAULT_STOCK_BOARD_ID } from '../../common/const';
 
 @Entity('stocks')
+@Unique(['symbol', 'boardId'])
 export class Stock {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true, length: 10 })
+  @Column({ length: 10 })
   @Index()
   symbol: string;
 
+  /** Ví dụ MAIN — khớp `boardId` từ SSI / niêm yết */
+  @Column({ name: 'board_id', length: 16, default: DEFAULT_STOCK_BOARD_ID })
+  boardId: string;
+
   @Column({ length: 256 })
   name: string;
+
+  @Column({ name: 'name_en', type: 'varchar', length: 512, nullable: true })
+  nameEn: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  isin: string | null;
+
+  /** Các field phụ từ API ngoài (JSON gốc từng phần, corporateEvents, …) */
+  @Column({ name: 'external_metadata', type: 'jsonb', nullable: true })
+  externalMetadata: Record<string, unknown> | null;
 
   @Column({ type: 'enum', enum: Exchange })
   exchange: Exchange;

@@ -7,6 +7,8 @@ import { Stock } from '../../database/entities/stock.entity';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
+import { MarketSnapshotIngest } from '../../database/entities/market-snapshot-ingest.entity';
+import { MarketSnapshotIngestService } from './market-snapshot-ingest.service';
 
 @Module({
   imports: [
@@ -16,10 +18,11 @@ import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot
       Order,
       Trade,
       StockBoardSnapshot,
+      MarketSnapshotIngest,
     ]),
   ],
-  providers: [MarketService],
+  providers: [MarketService, MarketSnapshotIngestService],
   controllers: [MarketController],
-  exports: [MarketService],
+  exports: [MarketService, MarketSnapshotIngestService],
 })
 export class MarketModule {}

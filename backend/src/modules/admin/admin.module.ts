@@ -8,11 +8,13 @@ import { Trade } from '../../database/entities/trade.entity';
 import { Stock } from '../../database/entities/stock.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { StocksModule } from '../stocks/stocks.module';
+import { MarketModule } from '../market/market.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Order, Trade, Stock, SystemConfig]),
     StocksModule,
+    MarketModule,
   ],
   providers: [AdminService],
   controllers: [AdminController],

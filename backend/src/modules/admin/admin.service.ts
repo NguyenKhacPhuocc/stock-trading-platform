@@ -6,6 +6,8 @@ import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { Stock } from '../../database/entities/stock.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
+import { DEFAULT_STOCK_BOARD_ID } from '../../common/const';
+import { MarketSnapshotIngestService } from '../market/market-snapshot-ingest.service';
 
 @Injectable()
 export class AdminService {
@@ -16,6 +18,7 @@ export class AdminService {
     @InjectRepository(Stock) private stockRepo: Repository<Stock>,
     @InjectRepository(SystemConfig)
     private configRepo: Repository<SystemConfig>,
+    private readonly marketSnapshotIngest: MarketSnapshotIngestService,
   ) {}
 
   async getStats() {
@@ -24,7 +27,9 @@ export class AdminService {
         this.userRepo.count(),
         this.orderRepo.count(),
         this.tradeRepo.count(),
-        this.stockRepo.count(),
+        this.stockRepo.count({
+          where: { boardId: DEFAULT_STOCK_BOARD_ID },
+        }),
       ]);
     return { totalUsers, totalOrders, totalTrades, totalStocks };
   }
@@ -65,5 +70,9 @@ export class AdminService {
     }
     const config = this.configRepo.create({ key, value, description });
     return this.configRepo.save(config);
+  }
+
+  forceRefreshMarketSnapshot() {
+    return this.marketSnapshotIngest.forceRefreshToday();
   }
 }

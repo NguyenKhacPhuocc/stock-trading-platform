@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+:root {
+  /* Màu nền chính - dark theme tài chính */
+  --background: #0f1117;
+  --surface: #1a1d27;
+  --surface-2: #252836;
+  --border: #2d3148;
+  --foreground: #e2e8f0;
+  --muted: #94a3b8;
+
+  /* Màu đặc trưng chứng khoán VN */
+  --price-up: #00c853; /* xanh lá: giá tăng */
+  --price-down: #ff3d00; /* đỏ: giá giảm */
+  --price-ref: #ffd600; /* vàng: giá tham chiếu */
+  --price-ceil: #aa00ff; /* tím: giá trần */
+  --price-floor: #00b0ff; /* xanh dương: giá sàn */
+
+  /* Brand — màu chủ đạo xanh lá chứng khoán */
+  --primary: #21ce3c;
+  --primary-dark: #1aad32;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-price-up: var(--price-up);
+  --color-price-down: var(--price-down);
+  --color-price-ref: var(--price-ref);
+  --color-price-ceil: var(--price-ceil);
+  --color-price-floor: var(--price-floor);
+  --color-primary: var(--primary);
+  --color-primary-dark: var(--primary-dark);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Scrollbar tối màu */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}

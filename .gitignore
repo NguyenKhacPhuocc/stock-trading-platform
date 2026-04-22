@@ -30,3 +30,17 @@ Thumbs.db
 # Editor
 .vscode/
 *.swp
+.gitnexus
+
+# AI / trợ lý lập trình (Cursor, Claude Code, v.v.) — không đẩy lên GitHub
+.cursor/
+.claude/
+.windsurf/
+.aider*
+.specstory/
+.cursorignore
+
+# Project AI guidance / docs (theo yêu cầu hiện tại)
+AGENTS.md
+CLAUDE.md
+docs/
