@@ -13,12 +13,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="vi">
       <body>
         <Providers>
-          <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
-            {/* Header của app.domain.com (luôn render kể cả khi 404) */}
+          <div className="flex h-dvh max-h-dvh flex-col overflow-hidden" style={{ background: 'var(--background)' }}>
             <TradeHeader />
-
-            {/* Khi không render được route (not-found), children = null/empty nên chỉ còn header */}
-            <main className="flex-1 overflow-auto">{children}</main>
+            <main className="flex flex-1 flex-col overflow-hidden">
+              {children}
+            </main>
           </div>
         </Providers>
       </body>

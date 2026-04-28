@@ -132,7 +132,7 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
     >
       {/* Không overflow-y-auto ở lớp nền — tránh 2 thanh scroll (nền + cột form). Chiều cao card bị cap theo viewport. */}
       <div
-        className="flex h-[min(92vh,calc(100dvh-2rem))] max-h-[min(92vh,calc(100dvh-2rem))] w-[76vw] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+        className="flex h-[min(92vh,calc(100dvh-2rem))] max-h-[min(92vh,calc(100dvh-2rem))] w-[76vw] flex-col overflow-hidden rounded-2xl border border-border bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Hàng riêng: nút đóng góc phải */}

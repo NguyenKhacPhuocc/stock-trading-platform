@@ -28,8 +28,8 @@ export interface MarketInstrumentDto {
   /** Giá khớp gần nhất trong phiên (không có thì 0) */
   closePrice: number;
   closeVol: number;
-  change: number;
-  changePercent: number;
+  priceChange: number;
+  priceChangePercent: number;
   totalTrading: number;
   totalTradingValue: number;
   averagePrice: number;

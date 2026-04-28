@@ -13,8 +13,7 @@ import {
   OrderStatus,
   CacheKey,
   CacheTtl,
-  marketQuotesCacheKey,
-  CACHE_TTL_MARKET_QUOTES,
+  marketSymbolsCacheKey,
   DEFAULT_STOCK_BOARD_ID,
 } from '../../common/const';
 import { RedisService } from '../../redis/redis.service';
@@ -24,6 +23,49 @@ import type { MarketInstrumentDto } from './dto/market-instrument.dto';
 interface DepthLevel {
   price: number;
   vol: number;
+}
+
+/** Một dòng cache Redis — snapshot `stock_board_snapshots` + các cột `stocks` cần cho UI/API */
+export interface CachedSymbolRow {
+  snapshotId: string | null;
+  stockId: string;
+  symbol: string;
+  exchange: Exchange;
+  fullName: string;
+  nameEn: string | null;
+  isin: string | null;
+  lotSize: number;
+  tickSize: number;
+  ceilPct: number;
+  floorPct: number;
+  tradingDate: string;
+  referencePrice: number;
+  ceilingPrice: number;
+  floorPrice: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  lastPrice: number;
+  lastVolume: number;
+  totalVolume: number;
+  totalValue: number;
+  bidPrice1: number;
+  bidPrice2: number;
+  bidPrice3: number;
+  bidVol1: number;
+  bidVol2: number;
+  bidVol3: number;
+  offerPrice1: number;
+  offerPrice2: number;
+  offerPrice3: number;
+  offerVol1: number;
+  offerVol2: number;
+  offerVol3: number;
+  totalBidQty: number;
+  totalOfferQty: number;
+  sessionCode: string | null;
+  priceChange: number;
+  priceChangePct: number;
 }
 
 @Injectable()
@@ -43,9 +85,7 @@ export class MarketService {
    * Gọi trước khi render bảng giá; không chứa depth hay phiên realtime.
    */
   async getQuotes(symbols?: string): Promise<object[]> {
-    const tradingDate = this.tradingDateYmd();
-
-    const where =
+    const symbolFilter =
       symbols && symbols.toUpperCase() !== 'ALL'
         ? symbols
             .toUpperCase()
@@ -53,55 +93,26 @@ export class MarketService {
             .map((s) => s.trim())
             .filter(Boolean)
         : null;
-
-    const scope = where ? [...where].sort().join(',') : 'ALL';
-    const cacheKey = marketQuotesCacheKey(tradingDate, scope);
-
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached) as object[];
-
-    const stocks = await this.stockRepo.find({
-      where: where
-        ? where.map((symbol) => ({
-            symbol,
-            boardId: DEFAULT_STOCK_BOARD_ID,
-            isActive: true,
-          }))
-        : { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
-      order: { symbol: 'ASC' },
-    });
-
-    await this.ensureSnapshotsForDate(stocks, tradingDate);
-
-    const snaps = await this.snapshotRepo.find({
-      where: { tradingDate },
-      relations: { stock: true },
-    });
-    const snapByStockId = new Map(snaps.map((s) => [s.stockId, s]));
-
-    const rows = stocks.map((stock) => {
-      const snap = snapByStockId.get(stock.id);
-      return {
-        symbol: stock.symbol,
-        exchange: stock.exchange,
-        fullName: stock.name,
-        reference: toNum(snap?.referencePrice ?? 0),
-        ceiling: toNum(snap?.ceilingPrice ?? 0),
-        floor: toNum(snap?.floorPrice ?? 0),
-        tradeLot: stock.lotSize,
-        priceStep: toNum(stock.tickSize),
-        tradingDate: snap
-          ? this.ymdToVN(snap.tradingDate)
-          : this.formatVNDate(new Date()),
-      };
-    });
-
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(rows),
-      CACHE_TTL_MARKET_QUOTES,
+    const tradingDate = await this.resolveActiveTradingDate();
+    const cachedRows = await this.getOrBuildSymbolsCacheRows(
+      tradingDate,
+      'ALL',
     );
-    return rows;
+    const filteredRows = symbolFilter
+      ? cachedRows.filter((row) => symbolFilter.includes(row.symbol))
+      : cachedRows;
+
+    return filteredRows.map((row) => ({
+      symbol: row.symbol,
+      exchange: row.exchange,
+      fullName: row.fullName,
+      reference: row.referencePrice,
+      ceiling: row.ceilingPrice,
+      floor: row.floorPrice,
+      tradeLot: row.lotSize,
+      priceStep: row.tickSize,
+      tradingDate: this.ymdToVN(row.tradingDate),
+    }));
   }
 
   async getPrices(): Promise<PriceHistory[]> {
@@ -128,51 +139,32 @@ export class MarketService {
 
   /**
    * Đọc snapshot bảng giá đã lưu (`stock_board_snapshots`).
-   * Đảm bảo có dòng cho ngày hiện tại, rồi rebuild depth + phiên từ orders/trades.
+   * Đảm bảo có dòng cho ngày hiện tại (seed TC/trần/sàn nếu thiếu).
+   * Không rebuild từ orders/trades tại đây — tránh ghi đè dữ liệu mỗi request;
+   * board mô phỏng được cập nhật qua `refreshBoardForStock` sau đặt lệnh/khớp.
    * @param exchange — lọc sàn: HOSE | HNX | UPCOM; bỏ trống = tất cả.
    */
   async getInstruments(exchange?: string): Promise<MarketInstrumentDto[]> {
     const now = new Date();
-    const tradingDate = this.tradingDateYmd(now);
+    const tradingDate = await this.resolveActiveTradingDate(now);
     const ex = exchange?.trim().toUpperCase();
     if (ex && !Object.values(Exchange).includes(ex as Exchange)) {
       throw new BadRequestException(
         `exchange không hợp lệ: ${exchange}. Cho phép: ${Object.values(Exchange).join(', ')}`,
       );
     }
-
-    const stocks = await this.stockRepo.find({
-      where: ex
-        ? {
-            isActive: true,
-            boardId: DEFAULT_STOCK_BOARD_ID,
-            exchange: ex as Exchange,
-          }
-        : { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
-      order: { symbol: 'ASC' },
-    });
-    if (stocks.length === 0) {
-      return [];
-    }
-
-    await this.ensureSnapshotsForDate(stocks, tradingDate);
-    await this.rebuildAllSnapshotsForDate(tradingDate, stocks);
-
-    const snaps = await this.snapshotRepo.find({
-      where: { tradingDate, stockId: In(stocks.map((s) => s.id)) },
-      relations: { stock: true },
-    });
-    snaps.sort((a, b) =>
-      (a.stock?.symbol ?? '').localeCompare(b.stock?.symbol ?? ''),
+    const exchangeScope = ex ?? 'ALL';
+    const cachedRows = await this.getOrBuildSymbolsCacheRows(
+      tradingDate,
+      exchangeScope,
     );
-
     const ts = now.getTime();
-    return snaps.map((s) => this.snapshotToDto(s, ts));
+    return cachedRows.map((row) => this.cachedRowToInstrumentDto(row, ts));
   }
 
   /** Gọi sau đặt/hủy lệnh (và sau khớp) để cập nhật 1 mã */
   async refreshBoardForStock(stockId: string): Promise<void> {
-    const tradingDate = this.tradingDateYmd();
+    const tradingDate = await this.resolveActiveTradingDate();
     const stock = await this.stockRepo.findOne({ where: { id: stockId } });
     if (!stock) return;
     await this.ensureSnapshotsForDate([stock], tradingDate);
@@ -188,14 +180,16 @@ export class MarketService {
         status: In([OrderStatus.PENDING, OrderStatus.PARTIAL]),
       },
     });
-    const trades = await this.tradeRepo.find({
-      where: { createdAt: MoreThanOrEqual(startOfDay) },
-      relations: { buyOrder: true },
-      order: { createdAt: 'ASC' },
-    });
-    const tlist = trades.filter((t) => t.buyOrder?.stockId === stockId);
-    this.fillSnapshotFromOrdersAndTrades(snap, orders, tlist);
+    const trades = await this.tradeRepo
+      .createQueryBuilder('trade')
+      .innerJoin('trade.buyOrder', 'buyOrder')
+      .where('trade.createdAt >= :startOfDay', { startOfDay })
+      .andWhere('buyOrder.stockId = :stockId', { stockId })
+      .orderBy('trade.createdAt', 'ASC')
+      .getMany();
+    this.fillSnapshotFromOrdersAndTrades(snap, orders, trades);
     await this.snapshotRepo.save(snap);
+    await this.invalidateSymbolsCache(tradingDate, stock.exchange);
   }
 
   async getPriceHistory(symbol: string, limit = 100) {
@@ -219,18 +213,23 @@ export class MarketService {
     return `${y}-${m}-${day}`;
   }
 
-  private formatVNDate(d: Date): string {
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yyyy = d.getFullYear();
-    return `${dd}/${mm}/${yyyy}`;
-  }
+  /** Chuẩn hóa date nhiều định dạng về dd/MM/yyyy để tránh crash khi cache cũ khác kiểu. */
+  private ymdToVN(ymd: unknown): string {
+    if (typeof ymd === 'string') {
+      const normalized = ymd.includes('T') ? ymd.split('T')[0] : ymd;
+      const [y, m, d] = normalized.split('-');
+      if (y && m && d) return `${d}/${m}/${y}`;
+      return ymd;
+    }
 
-  /** Cột date DB `YYYY-MM-DD` → hiển thị dd/MM/yyyy (tránh lệch TZ khi dùng Date.parse) */
-  private ymdToVN(ymd: string): string {
-    const [y, m, d] = ymd.split('-');
-    if (!y || !m || !d) return ymd;
-    return `${d}/${m}/${y}`;
+    if (ymd instanceof Date && Number.isFinite(ymd.getTime())) {
+      const y = ymd.getFullYear();
+      const m = String(ymd.getMonth() + 1).padStart(2, '0');
+      const d = String(ymd.getDate()).padStart(2, '0');
+      return `${d}/${m}/${y}`;
+    }
+
+    return '';
   }
 
   private startOfTradingDay(): Date {
@@ -239,77 +238,253 @@ export class MarketService {
     return d;
   }
 
-  private async latestCloseForStock(stockId: string): Promise<number> {
-    const ph = await this.priceRepo.findOne({
-      where: { stockId },
-      order: { date: 'DESC' },
-    });
-    return ph ? toNum(ph.close) : 0;
-  }
-
   private async ensureSnapshotsForDate(
     stocks: Stock[],
     tradingDate: string,
   ): Promise<void> {
-    for (const stock of stocks) {
-      const exists = await this.snapshotRepo.exist({
-        where: { stockId: stock.id, tradingDate },
-      });
-      if (exists) continue;
+    const latestCloseByStockId = await this.latestCloseByStockIds(
+      stocks.map((stock) => stock.id),
+    );
 
-      const ref = await this.latestCloseForStock(stock.id);
+    for (const stock of stocks) {
+      const ref = latestCloseByStockId.get(stock.id) ?? 0;
       const tick = toNum(stock.tickSize);
       const cp = toNum(stock.ceilPct);
       const fp = toNum(stock.floorPct);
       const ceilP = ref > 0 ? roundToTick(ref * (1 + cp / 100), tick) : 0;
       const floorP = ref > 0 ? roundToTick(ref * (1 - fp / 100), tick) : 0;
 
-      const snap = this.snapshotRepo.create({
-        stockId: stock.id,
-        tradingDate,
-        referencePrice: ref,
-        ceilingPrice: ceilP,
-        floorPrice: floorP,
-      });
-      await this.snapshotRepo.save(snap);
+      // INSERT ... ON CONFLICT DO NOTHING — tránh race condition TOCTOU khi nhiều request đồng thời
+      await this.snapshotRepo
+        .createQueryBuilder()
+        .insert()
+        .into(StockBoardSnapshot)
+        .values({
+          stockId: stock.id,
+          tradingDate,
+          referencePrice: ref,
+          ceilingPrice: ceilP,
+          floorPrice: floorP,
+        })
+        .orIgnore()
+        .execute();
     }
   }
 
-  private async rebuildAllSnapshotsForDate(
+  private async latestCloseByStockIds(
+    stockIds: string[],
+  ): Promise<Map<string, number>> {
+    if (stockIds.length === 0) return new Map();
+    const latestPrices = await this.priceRepo
+      .createQueryBuilder('price')
+      .distinctOn(['price.stockId'])
+      .where('price.stockId IN (:...stockIds)', { stockIds })
+      .orderBy('price.stockId', 'ASC')
+      .addOrderBy('price.date', 'DESC')
+      .getMany();
+
+    return new Map(
+      latestPrices.map((price) => [price.stockId, toNum(price.close)]),
+    );
+  }
+
+  private async resolveActiveTradingDate(now = new Date()): Promise<string> {
+    const raw = await this.snapshotRepo
+      .createQueryBuilder('snapshot')
+      .select('MAX(snapshot.tradingDate)', 'maxTradingDate')
+      .getRawOne<{ maxTradingDate: string | null }>();
+
+    if (raw?.maxTradingDate) return raw.maxTradingDate;
+    return this.tradingDateYmd(now);
+  }
+
+  private async getOrBuildSymbolsCacheRows(
     tradingDate: string,
-    stocks: Stock[],
-  ): Promise<void> {
-    const startOfDay = this.startOfTradingDay();
-    const stockIds = stocks.map((s) => s.id);
+    scope: string,
+  ): Promise<CachedSymbolRow[]> {
+    const cacheKey = marketSymbolsCacheKey(tradingDate, scope);
+    const lockKey = `${cacheKey}:lock`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as CachedSymbolRow[];
 
-    const allOrders =
-      stockIds.length > 0
-        ? await this.orderRepo.find({
-            where: {
-              stockId: In(stockIds),
-              status: In([OrderStatus.PENDING, OrderStatus.PARTIAL]),
-            },
-          })
-        : [];
+    const lockValue = await this.redis.get(lockKey);
+    const lockAcquired = !lockValue;
+    if (lockAcquired) {
+      try {
+        await this.redis.set(lockKey, '1', 5);
+        const rows = await this.buildSymbolsCacheRows(tradingDate, scope);
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(rows),
+          CacheTtl.MARKET_SYMBOLS,
+        );
+        return rows;
+      } finally {
+        await this.redis.del(lockKey);
+      }
+    }
 
-    const ordersByStock = this.groupOrdersByStock(allOrders);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await this.sleep(80);
+      const retryCached = await this.redis.get(cacheKey);
+      if (retryCached) return JSON.parse(retryCached) as CachedSymbolRow[];
+    }
 
-    const tradesToday = await this.tradeRepo.find({
-      where: { createdAt: MoreThanOrEqual(startOfDay) },
-      relations: { buyOrder: true },
-      order: { createdAt: 'ASC' },
+    const rows = await this.buildSymbolsCacheRows(tradingDate, scope);
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(rows),
+      CacheTtl.MARKET_SYMBOLS,
+    );
+    return rows;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
     });
-    const tradesByStock = this.groupTradesByStock(tradesToday);
+  }
 
-    const snaps = await this.snapshotRepo.find({ where: { tradingDate } });
-    for (const snap of snaps) {
-      const orders = ordersByStock.get(snap.stockId) ?? [];
-      const tlist = tradesByStock.get(snap.stockId) ?? [];
-      this.fillSnapshotFromOrdersAndTrades(snap, orders, tlist);
-    }
-    if (snaps.length > 0) {
-      await this.snapshotRepo.save(snaps);
-    }
+  private async buildSymbolsCacheRows(
+    tradingDate: string,
+    scope: string,
+  ): Promise<CachedSymbolRow[]> {
+    const where =
+      scope !== 'ALL'
+        ? {
+            isActive: true,
+            boardId: DEFAULT_STOCK_BOARD_ID,
+            exchange: scope as Exchange,
+          }
+        : { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID };
+    const stocks = await this.stockRepo.find({
+      where,
+      order: { symbol: 'ASC' },
+    });
+    if (stocks.length === 0) return [];
+
+    await this.ensureSnapshotsForDate(stocks, tradingDate);
+    const snaps = await this.snapshotRepo.find({
+      where: { tradingDate, stockId: In(stocks.map((s) => s.id)) },
+    });
+    const snapByStockId = new Map(snaps.map((s) => [s.stockId, s]));
+
+    return stocks.map((stock) => {
+      const snap = snapByStockId.get(stock.id);
+      return {
+        snapshotId: snap?.id ?? null,
+        stockId: stock.id,
+        symbol: stock.symbol,
+        exchange: stock.exchange,
+        fullName: stock.name,
+        nameEn: stock.nameEn,
+        isin: stock.isin,
+        lotSize: stock.lotSize,
+        tickSize: toNum(stock.tickSize),
+        ceilPct: toNum(stock.ceilPct),
+        floorPct: toNum(stock.floorPct),
+        tradingDate,
+        referencePrice: toNum(snap?.referencePrice ?? 0),
+        ceilingPrice: toNum(snap?.ceilingPrice ?? 0),
+        floorPrice: toNum(snap?.floorPrice ?? 0),
+        openPrice: toNum(snap?.openPrice ?? 0),
+        highPrice: toNum(snap?.highPrice ?? 0),
+        lowPrice: toNum(snap?.lowPrice ?? 0),
+        lastPrice: toNum(snap?.lastPrice ?? 0),
+        lastVolume: snap?.lastVolume ?? 0,
+        totalVolume: snap?.totalVolume ?? 0,
+        totalValue: toNum(snap?.totalValue ?? 0),
+        bidPrice1: toNum(snap?.bidPrice1 ?? 0),
+        bidPrice2: toNum(snap?.bidPrice2 ?? 0),
+        bidPrice3: toNum(snap?.bidPrice3 ?? 0),
+        bidVol1: snap?.bidVol1 ?? 0,
+        bidVol2: snap?.bidVol2 ?? 0,
+        bidVol3: snap?.bidVol3 ?? 0,
+        offerPrice1: toNum(snap?.offerPrice1 ?? 0),
+        offerPrice2: toNum(snap?.offerPrice2 ?? 0),
+        offerPrice3: toNum(snap?.offerPrice3 ?? 0),
+        offerVol1: snap?.offerVol1 ?? 0,
+        offerVol2: snap?.offerVol2 ?? 0,
+        offerVol3: snap?.offerVol3 ?? 0,
+        totalBidQty: snap?.totalBidQty ?? 0,
+        totalOfferQty: snap?.totalOfferQty ?? 0,
+        sessionCode: snap?.sessionCode ?? null,
+        priceChange: toNum(snap?.priceChange ?? 0),
+        priceChangePct: toNum(snap?.priceChangePct ?? 0),
+      };
+    });
+  }
+
+  /** Ghi Redis `market:symbols:<tradingDate>:<scope>` đồng bộ với DB (ALL + từng sàn). */
+  async populateSymbolsCachesForTradingDate(
+    tradingDate: string,
+  ): Promise<void> {
+    const scopes: Array<'ALL' | Exchange> = [
+      'ALL',
+      Exchange.HOSE,
+      Exchange.HNX,
+      Exchange.UPCOM,
+    ];
+    await Promise.all(
+      scopes.map(async (scope) => {
+        const rows = await this.buildSymbolsCacheRows(tradingDate, scope);
+        await this.redis.set(
+          marketSymbolsCacheKey(tradingDate, scope),
+          JSON.stringify(rows),
+          CacheTtl.MARKET_SYMBOLS,
+        );
+      }),
+    );
+  }
+
+  private cachedRowToInstrumentDto(
+    row: CachedSymbolRow,
+    ts: number,
+  ): MarketInstrumentDto {
+    const totalVol = row.totalVolume;
+    const totalVal = row.totalValue;
+    const avgPrice = totalVol > 0 ? totalVal / totalVol : 0;
+    return {
+      symbol: row.symbol,
+      stockId: row.stockId,
+      fullName: row.fullName,
+      tradingDate: this.ymdToVN(row.tradingDate),
+      exchange: row.exchange,
+      ceiling: row.ceilingPrice,
+      floor: row.floorPrice,
+      reference: row.referencePrice,
+      bidPrice3: row.bidPrice3,
+      bidVol3: row.bidVol3,
+      bidPrice2: row.bidPrice2,
+      bidVol2: row.bidVol2,
+      bidPrice1: row.bidPrice1,
+      bidVol1: row.bidVol1,
+      offerPrice1: row.offerPrice1,
+      offerVol1: row.offerVol1,
+      offerPrice2: row.offerPrice2,
+      offerVol2: row.offerVol2,
+      offerPrice3: row.offerPrice3,
+      offerVol3: row.offerVol3,
+      closePrice: row.lastPrice,
+      closeVol: row.lastVolume,
+      priceChange: Math.round(row.priceChange * 100) / 100,
+      priceChangePercent: Math.round(row.priceChangePct * 100) / 100,
+      totalTrading: totalVol,
+      totalTradingValue: totalVal,
+      averagePrice: Math.round(avgPrice * 100) / 100,
+      open: row.openPrice,
+      high: row.highPrice,
+      low: row.lowPrice,
+      foreignBuy: 0,
+      foreignSell: 0,
+      foreignRemain: 0,
+      foreignRoom: 0,
+      TOTAL_OFFER_QTTY: row.totalOfferQty,
+      TOTAL_BID_QTTY: row.totalBidQty,
+      tradingSessionId: row.sessionCode ?? 'MOCK_CONTINUOUS',
+      ts,
+      kid: `${ts}-${randomBytes(8).toString('hex')}`,
+    };
   }
 
   private fillSnapshotFromOrdersAndTrades(
@@ -342,87 +517,6 @@ export class MarketService {
     snap.offerVol3 = depth.ask[2].vol;
     snap.totalBidQty = depth.totalBid;
     snap.totalOfferQty = depth.totalOffer;
-  }
-
-  private snapshotToDto(
-    snap: StockBoardSnapshot,
-    ts: number,
-  ): MarketInstrumentDto {
-    const stock = snap.stock;
-    const reference = toNum(snap.referencePrice);
-    const closePrice = toNum(snap.lastPrice);
-    const change = reference > 0 ? closePrice - reference : 0;
-    const changePercent =
-      reference > 0 && closePrice > 0
-        ? ((closePrice - reference) / reference) * 100
-        : 0;
-    const totalVol = snap.totalVolume ?? 0;
-    const totalVal = toNum(snap.totalValue);
-    const avgPrice = totalVol > 0 ? totalVal / totalVol : 0;
-
-    return {
-      symbol: stock?.symbol ?? '',
-      stockId: snap.stockId,
-      fullName: stock?.name ?? '',
-      tradingDate: this.ymdToVN(snap.tradingDate),
-      exchange: stock?.exchange ?? '',
-      ceiling: toNum(snap.ceilingPrice),
-      floor: toNum(snap.floorPrice),
-      reference,
-      bidPrice3: toNum(snap.bidPrice3),
-      bidVol3: snap.bidVol3,
-      bidPrice2: toNum(snap.bidPrice2),
-      bidVol2: snap.bidVol2,
-      bidPrice1: toNum(snap.bidPrice1),
-      bidVol1: snap.bidVol1,
-      offerPrice1: toNum(snap.offerPrice1),
-      offerVol1: snap.offerVol1,
-      offerPrice2: toNum(snap.offerPrice2),
-      offerVol2: snap.offerVol2,
-      offerPrice3: toNum(snap.offerPrice3),
-      offerVol3: snap.offerVol3,
-      closePrice,
-      closeVol: snap.lastVolume,
-      change: Math.round(change * 100) / 100,
-      changePercent: Math.round(changePercent * 100) / 100,
-      totalTrading: totalVol,
-      totalTradingValue: totalVal,
-      averagePrice: Math.round(avgPrice * 100) / 100,
-      open: toNum(snap.openPrice),
-      high: toNum(snap.highPrice),
-      low: toNum(snap.lowPrice),
-      foreignBuy: 0,
-      foreignSell: 0,
-      foreignRemain: 0,
-      foreignRoom: 0,
-      TOTAL_OFFER_QTTY: snap.totalOfferQty,
-      TOTAL_BID_QTTY: snap.totalBidQty,
-      tradingSessionId: 'MOCK_CONTINUOUS',
-      ts,
-      kid: `${ts}-${randomBytes(8).toString('hex')}`,
-    };
-  }
-
-  private groupOrdersByStock(orders: Order[]): Map<string, Order[]> {
-    const m = new Map<string, Order[]>();
-    for (const o of orders) {
-      const arr = m.get(o.stockId) ?? [];
-      arr.push(o);
-      m.set(o.stockId, arr);
-    }
-    return m;
-  }
-
-  private groupTradesByStock(trades: Trade[]): Map<string, Trade[]> {
-    const m = new Map<string, Trade[]>();
-    for (const t of trades) {
-      const sid = t.buyOrder?.stockId;
-      if (!sid) continue;
-      const arr = m.get(sid) ?? [];
-      arr.push(t);
-      m.set(sid, arr);
-    }
-    return m;
   }
 
   private aggregateSession(tradesAsc: Trade[]): {
@@ -522,5 +616,15 @@ export class MarketService {
       totalBid,
       totalOffer,
     };
+  }
+
+  private async invalidateSymbolsCache(
+    tradingDate: string,
+    exchange: Exchange,
+  ): Promise<void> {
+    await Promise.all([
+      this.redis.del(marketSymbolsCacheKey(tradingDate, 'ALL')),
+      this.redis.del(marketSymbolsCacheKey(tradingDate, exchange)),
+    ]);
   }
 }

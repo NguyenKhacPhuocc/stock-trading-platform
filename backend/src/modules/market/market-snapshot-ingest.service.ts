@@ -9,13 +9,13 @@ import { MarketSnapshotIngest } from '../../database/entities/market-snapshot-in
 import {
   DEFAULT_STOCK_BOARD_ID,
   Exchange,
-  CACHE_TTL_MARKET_QUOTES,
   MarketSnapshotIngestStatus,
   MarketSnapshotSource,
-  marketQuotesCacheKey,
+  marketSymbolsCacheKey,
 } from '../../common/const';
 import { toNum } from './market-price.util';
 import { RedisService } from '../../redis/redis.service';
+import { MarketService } from './market.service';
 
 type SsiExchangePath = 'hose' | 'hnx' | 'upcom';
 
@@ -83,6 +83,7 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
     private readonly ingestRepo: Repository<MarketSnapshotIngest>,
     private readonly config: ConfigService,
     private readonly redis: RedisService,
+    private readonly marketService: MarketService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -94,56 +95,58 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
   }
 
   private async runStartupIngest(force = false): Promise<IngestRunResult> {
-    const tradingDate = this.tradingDateYmdVN();
+    const fallbackTradingDate = this.tradingDateYmdVN();
     const skipIfSuccess =
       this.config.get<string>('MARKET_INGEST_SKIP_IF_SUCCESS', 'true') !==
       'false';
-
-    if (!force && skipIfSuccess) {
-      const existedSuccess = await this.ingestRepo.exist({
-        where: {
-          tradingDate,
-          source: MarketSnapshotSource.SSI,
-          status: MarketSnapshotIngestStatus.SUCCESS,
-        },
-      });
-      if (existedSuccess) {
-        await this.refreshQuotesCache(tradingDate);
-        const message = `Skip SSI ingest: đã có SUCCESS cho ngày ${tradingDate}.`;
-        this.logger.log(message);
-        return {
-          skipped: true,
-          tradingDate,
-          symbolsUpserted: 0,
-          message,
-        };
-      }
-    }
-
-    const ingest = await this.ingestRepo.save(
-      this.ingestRepo.create({
-        tradingDate,
-        source: MarketSnapshotSource.SSI,
-        status: MarketSnapshotIngestStatus.PENDING,
-        startedAt: new Date(),
-        finishedAt: null,
-        errorMessage: null,
-        symbolsUpserted: null,
-      }),
-    );
-
+    let ingestId: string | null = null;
+    let mappedTradingDate = fallbackTradingDate;
     try {
       const rows = await this.fetchAllExchanges();
       if (rows.length === 0) {
         throw new Error('SSI trả về danh sách rỗng cho tất cả sàn.');
       }
 
-      const mappedTradingDate = this.resolveTradingDate(rows, tradingDate);
+      mappedTradingDate = this.resolveTradingDate(rows, fallbackTradingDate);
+      if (!force && skipIfSuccess) {
+        const existedSuccess = await this.ingestRepo.exist({
+          where: {
+            tradingDate: mappedTradingDate,
+            source: MarketSnapshotSource.SSI,
+            status: MarketSnapshotIngestStatus.SUCCESS,
+          },
+        });
+        if (existedSuccess) {
+          await this.refreshSymbolsCache(mappedTradingDate);
+          const message = `Skip SSI ingest: đã có SUCCESS cho ngày ${mappedTradingDate}.`;
+          this.logger.log(message);
+          return {
+            skipped: true,
+            tradingDate: mappedTradingDate,
+            symbolsUpserted: 0,
+            message,
+          };
+        }
+      }
+
+      const ingest = await this.ingestRepo.save(
+        this.ingestRepo.create({
+          tradingDate: mappedTradingDate,
+          source: MarketSnapshotSource.SSI,
+          status: MarketSnapshotIngestStatus.PENDING,
+          startedAt: new Date(),
+          finishedAt: null,
+          errorMessage: null,
+          symbolsUpserted: null,
+        }),
+      );
+      ingestId = ingest.id;
+
       const symbolsUpserted = await this.upsertDailySeed(
         rows,
         mappedTradingDate,
       );
-      await this.refreshQuotesCache(mappedTradingDate);
+      await this.refreshSymbolsCache(mappedTradingDate);
 
       await this.ingestRepo.update(ingest.id, {
         status: MarketSnapshotIngestStatus.SUCCESS,
@@ -161,15 +164,29 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
       };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.ingestRepo.update(ingest.id, {
-        status: MarketSnapshotIngestStatus.FAILED,
-        finishedAt: new Date(),
-        errorMessage: message,
-      });
-      this.logger.error(`SSI ingest FAILED (${tradingDate}): ${message}`);
+      if (ingestId) {
+        await this.ingestRepo.update(ingestId, {
+          status: MarketSnapshotIngestStatus.FAILED,
+          finishedAt: new Date(),
+          errorMessage: message,
+        });
+      } else {
+        await this.ingestRepo.save(
+          this.ingestRepo.create({
+            tradingDate: mappedTradingDate,
+            source: MarketSnapshotSource.SSI,
+            status: MarketSnapshotIngestStatus.FAILED,
+            startedAt: new Date(),
+            finishedAt: new Date(),
+            errorMessage: message,
+            symbolsUpserted: 0,
+          }),
+        );
+      }
+      this.logger.error(`SSI ingest FAILED (${mappedTradingDate}): ${message}`);
       return {
         skipped: false,
-        tradingDate,
+        tradingDate: mappedTradingDate,
         symbolsUpserted: 0,
         message,
       };
@@ -296,6 +313,20 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
       );
 
     if (snapshots.length > 0) {
+      const activeStockIds = [
+        ...new Set(
+          snapshots
+            .map((item) => item.stockId)
+            .filter(
+              (stockId): stockId is string => typeof stockId === 'string',
+            ),
+        ),
+      ];
+      await this.deleteSnapshotsOutsideTradingDate(tradingDate);
+      await this.deleteStaleSnapshotsForTradingDate(
+        activeStockIds,
+        tradingDate,
+      );
       await this.snapshotRepo.upsert(snapshots, {
         conflictPaths: ['stockId', 'tradingDate'],
         skipUpdateIfNoValuesChanged: true,
@@ -327,6 +358,10 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
     };
   }
 
+  /**
+   * Seed ngày từ SSI: chỉ tham chiếu / trần / sàn (+ metadata).
+   * Giá phiên, KL, depth… lưu 0 — dữ liệu giao dịch mô phỏng do engine cập nhật sau.
+   */
   private toSnapshotSeed(
     row: SsiSymbol,
     tradingDate: string,
@@ -338,49 +373,39 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
     const stockId = stockIdByKey.get(`${symbol}|${boardId}`);
     if (!stockId) return null;
 
-    const best1BidVol = Math.trunc(toNum(row.best1BidVol));
-    const best2BidVol = Math.trunc(toNum(row.best2BidVol));
-    const best3BidVol = Math.trunc(toNum(row.best3BidVol));
-    const best1OfferVol = Math.trunc(toNum(row.best1OfferVol));
-    const best2OfferVol = Math.trunc(toNum(row.best2OfferVol));
-    const best3OfferVol = Math.trunc(toNum(row.best3OfferVol));
-
     return {
       stockId,
       tradingDate,
       referencePrice: toNum(row.refPrice),
       ceilingPrice: toNum(row.ceiling),
       floorPrice: toNum(row.floor),
-      openPrice: toNum(row.openPrice),
-      highPrice: toNum(row.highest),
-      lowPrice: toNum(row.lowest),
-      lastPrice: toNum(row.matchedPrice),
-      lastVolume: Math.trunc(toNum(row.matchedVolume)),
-      totalVolume: Math.trunc(
-        toNum(row.stockVol) || toNum(row.nmTotalTradedQty),
-      ),
-      totalValue: toNum(row.nmTotalTradedValue),
-      bidPrice1: toNum(row.best1Bid),
-      bidPrice2: toNum(row.best2Bid),
-      bidPrice3: toNum(row.best3Bid),
-      bidVol1: best1BidVol,
-      bidVol2: best2BidVol,
-      bidVol3: best3BidVol,
-      offerPrice1: toNum(row.best1Offer),
-      offerPrice2: toNum(row.best2Offer),
-      offerPrice3: toNum(row.best3Offer),
-      offerVol1: best1OfferVol,
-      offerVol2: best2OfferVol,
-      offerVol3: best3OfferVol,
-      totalBidQty: best1BidVol + best2BidVol + best3BidVol,
-      totalOfferQty: best1OfferVol + best2OfferVol + best3OfferVol,
+      openPrice: 0,
+      highPrice: 0,
+      lowPrice: 0,
+      lastPrice: 0,
+      lastVolume: 0,
+      totalVolume: 0,
+      totalValue: 0,
+      bidPrice1: 0,
+      bidPrice2: 0,
+      bidPrice3: 0,
+      bidVol1: 0,
+      bidVol2: 0,
+      bidVol3: 0,
+      offerPrice1: 0,
+      offerPrice2: 0,
+      offerPrice3: 0,
+      offerVol1: 0,
+      offerVol2: 0,
+      offerVol3: 0,
+      totalBidQty: 0,
+      totalOfferQty: 0,
       ingestSource: MarketSnapshotSource.SSI,
       ingestedAt: new Date(),
       rawPayload: this.toRawPayload(row),
       sessionCode: row.exchangeSession ?? row.session ?? null,
-      priceChange: row.priceChange != null ? toNum(row.priceChange) : null,
-      priceChangePct:
-        row.priceChangePercent != null ? toNum(row.priceChangePercent) : null,
+      priceChange: 0,
+      priceChangePct: 0,
     };
   }
 
@@ -392,57 +417,35 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
     return null;
   }
 
-  private async refreshQuotesCache(tradingDate: string): Promise<void> {
-    const stocks = await this.stockRepo.find({
-      where: { isActive: true, boardId: DEFAULT_STOCK_BOARD_ID },
-      order: { symbol: 'ASC' },
-    });
-    const snapshots = await this.snapshotRepo.find({
-      where: { tradingDate },
-    });
-    const snapshotByStockId = new Map(snapshots.map((s) => [s.stockId, s]));
-    const rows = stocks.map((stock) => {
-      const snap = snapshotByStockId.get(stock.id);
-      return {
-        symbol: stock.symbol,
-        exchange: stock.exchange,
-        fullName: stock.name,
-        reference: toNum(snap?.referencePrice ?? 0),
-        ceiling: toNum(snap?.ceilingPrice ?? 0),
-        floor: toNum(snap?.floorPrice ?? 0),
-        tradeLot: stock.lotSize,
-        priceStep: toNum(stock.tickSize),
-        tradingDate,
-      };
-    });
+  private async refreshSymbolsCache(tradingDate: string): Promise<void> {
+    await this.clearOldSymbolsCacheKeys(tradingDate);
+    await this.marketService.populateSymbolsCachesForTradingDate(tradingDate);
+  }
 
-    const cacheKey = marketQuotesCacheKey(tradingDate, 'ALL');
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(rows),
-      CACHE_TTL_MARKET_QUOTES,
-    );
+  private async clearOldSymbolsCacheKeys(
+    currentTradingDate: string,
+  ): Promise<void> {
+    const pastIngests = await this.ingestRepo.find({
+      select: ['tradingDate'],
+      where: {
+        source: MarketSnapshotSource.SSI,
+        status: MarketSnapshotIngestStatus.SUCCESS,
+      },
+    });
+    const oldTradingDates = [
+      ...new Set(
+        pastIngests
+          .map((item) => item.tradingDate)
+          .filter((tradingDate) => tradingDate !== currentTradingDate),
+      ),
+    ];
+    if (oldTradingDates.length === 0) return;
 
-    const byExchange = new Map<Exchange, typeof rows>();
-    byExchange.set(
-      Exchange.HOSE,
-      rows.filter((row) => row.exchange === Exchange.HOSE),
-    );
-    byExchange.set(
-      Exchange.HNX,
-      rows.filter((row) => row.exchange === Exchange.HNX),
-    );
-    byExchange.set(
-      Exchange.UPCOM,
-      rows.filter((row) => row.exchange === Exchange.UPCOM),
-    );
-
+    const scopes = ['ALL', Exchange.HOSE, Exchange.HNX, Exchange.UPCOM];
     await Promise.all(
-      [...byExchange.entries()].map(([exchange, exchangeRows]) =>
-        this.redis.set(
-          marketQuotesCacheKey(tradingDate, exchange),
-          JSON.stringify(exchangeRows),
-          CACHE_TTL_MARKET_QUOTES,
+      oldTradingDates.flatMap((tradingDate) =>
+        scopes.map((scope) =>
+          this.redis.del(marketSymbolsCacheKey(tradingDate, scope)),
         ),
       ),
     );
@@ -455,6 +458,37 @@ export class MarketSnapshotIngestService implements OnApplicationBootstrap {
   private resolveBoardId(boardId: string | undefined): string {
     const normalized = (boardId ?? '').trim().toUpperCase();
     return normalized || DEFAULT_STOCK_BOARD_ID;
+  }
+
+  /**
+   * Chỉ giữ snapshot của phiên hiện tại (mô phỏng 1 phiên active tại một thời điểm).
+   */
+  private async deleteSnapshotsOutsideTradingDate(
+    currentTradingDate: string,
+  ): Promise<void> {
+    await this.snapshotRepo
+      .createQueryBuilder()
+      .delete()
+      .from(StockBoardSnapshot)
+      .where('trading_date <> :currentTradingDate', { currentTradingDate })
+      .execute();
+  }
+
+  /**
+   * Dọn snapshot dư của cùng ngày (các mã không còn trong batch SSI mới nhất).
+   */
+  private async deleteStaleSnapshotsForTradingDate(
+    activeStockIds: string[],
+    currentTradingDate: string,
+  ): Promise<void> {
+    if (activeStockIds.length === 0) return;
+    await this.snapshotRepo
+      .createQueryBuilder()
+      .delete()
+      .from(StockBoardSnapshot)
+      .where('trading_date = :currentTradingDate', { currentTradingDate })
+      .andWhere('stock_id NOT IN (:...activeStockIds)', { activeStockIds })
+      .execute();
   }
 
   private tradingDateYmdVN(): string {

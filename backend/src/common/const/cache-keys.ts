@@ -1,20 +1,19 @@
 /** Redis cache keys — tập trung để dễ tìm và tránh trùng */
 export const CacheKey = {
   MARKET_PRICES: 'market:prices',
-  MARKET_INSTRUMENTS: 'market:instruments',
+  MARKET_SYMBOLS: 'market:symbols',
 } as const;
 
-/**
- * quotes: key = ngày + scope — ALL hoặc danh sách mã sort (tránh cache ALL lẫn subset ?symbols=).
- */
-export const marketQuotesCacheKey = (date: string, scope: string) =>
-  `market:quotes:${date}:${scope}`;
+/** key dùng chung cho dữ liệu symbols (full snapshot payload) */
+export const marketSymbolsCacheKey = (date: string, scope: string) =>
+  `${CacheKey.MARKET_SYMBOLS}:${date}:${scope}`;
+export const MARKET_SYMBOLS_CACHE_PREFIX = `${CacheKey.MARKET_SYMBOLS}:`;
 
 /** TTL (giây) cho từng loại cache */
 export const CacheTtl = {
   MARKET_PRICES: 5,
-  MARKET_INSTRUMENTS: 3,
+  MARKET_SYMBOLS: 300,
 } as const;
 
-/** TTL quotes: 24h — qua ngày mới key đổi nên tự miss, không cần xóa thủ công */
+/** TTL symbols cache: 24h, có dọn key phiên cũ khi ingest ngày mới */
 export const CACHE_TTL_MARKET_QUOTES = 86_400;

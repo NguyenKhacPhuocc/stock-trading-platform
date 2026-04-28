@@ -120,7 +120,7 @@ export default function TradeHeader() {
                   </button>
                   {accountMenuOpen && (
                     <ul
-                      className="absolute right-0 z-50 mt-1 min-w-[12rem] rounded border py-1 shadow-lg"
+                      className="absolute right-0 z-50 mt-1 min-w-[12rem] rounded border py-1"
                       style={{
                         borderColor: 'var(--border)',
                         background: 'var(--surface)',

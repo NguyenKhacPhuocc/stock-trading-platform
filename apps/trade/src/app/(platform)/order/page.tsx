@@ -1,6 +1,6 @@
 export default function OrderPage() {
   return (
-    <div>
+    <div className="flex-1 overflow-y-auto">
       <h1 className="text-xl font-semibold mb-4" style={{ color: 'var(--foreground)' }}>
         Đặt lệnh
       </h1>
