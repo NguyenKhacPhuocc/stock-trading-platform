@@ -1,10 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiClient } from '@stock/utils';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { fetchMarketRows } from '@/store/slices/market.slice';
-import type { ExchangeCode, PriceBoardRow } from './price-board-types';
+import type { ExchangeCode } from './price-board-types';
 import { PriceBoardOverview } from './price-board-overview';
 import { PriceBoardTable, type PriceBoardTableHandle } from './price-board-table';
 import { PriceBoardToolbar } from './price-board-toolbar';
@@ -14,14 +13,13 @@ export default function PriceBoardView() {
   const tableRef = useRef<PriceBoardTableHandle | null>(null);
   const pendingScrollSymbolRef = useRef<string | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
-  const rows = useAppSelector((s) => s.market.rows);
+  const exchangeBySymbol = useAppSelector((s) => s.market.exchangeBySymbol);
+  const orderSymbols = useAppSelector((s) => s.market.orderSymbols);
+  const searchUniverse = useAppSelector((s) => s.market.searchUniverse);
   const [exchange, setExchange] = useState<ExchangeCode | 'ALL'>('HOSE');
   const [search, setSearch] = useState('');
   const [pinnedSymbols, setPinnedSymbols] = useState<string[]>([]);
   const [highlightedSymbol, setHighlightedSymbol] = useState<string | null>(null);
-  const [searchUniverse, setSearchUniverse] = useState<
-    Array<{ symbol: string; exchange: ExchangeCode; fullName?: string }>
-  >([]);
   const [nowLabel, setNowLabel] = useState('');
 
   useEffect(() => {
@@ -41,39 +39,23 @@ export default function PriceBoardView() {
     dispatch(fetchMarketRows({ exchange }));
   }, [dispatch, exchange]);
 
-  useEffect(() => {
-    const loadQuotes = async () => {
-      try {
-        const res = await apiClient.get('/market/quotes', { params: { symbols: 'ALL' } });
-        const payload = Array.isArray(res.data)
-          ? res.data
-          : Array.isArray(res.data?.d)
-            ? res.data.d
-            : [];
-        const normalized = (payload as Array<Record<string, unknown>>)
-          .map((item) => ({
-            symbol: String(item.symbol ?? '').toUpperCase(),
-            exchange: String(item.exchange ?? '').toUpperCase() as ExchangeCode,
-            fullName: typeof item.fullName === 'string' ? item.fullName : undefined,
-          }))
-          .filter((item) => item.symbol && item.exchange)
-          .sort((a, b) => a.symbol.localeCompare(b.symbol));
-        setSearchUniverse(normalized);
-      } catch {
-        setSearchUniverse([]);
-      }
-    };
-    void loadQuotes();
-  }, []);
+  const exchangeFilteredSymbols = useMemo(() => {
+    if (exchange === 'ALL') return orderSymbols;
+    return orderSymbols.filter((sym) => exchangeBySymbol[sym] === exchange);
+  }, [exchange, orderSymbols, exchangeBySymbol]);
 
-  const displayRows = useMemo(() => {
-    let list = rows;
-    if (exchange !== 'ALL') list = list.filter((r) => r.exchange === exchange);
-    const pinnedSet = new Set(pinnedSymbols);
-    const pinned = pinnedSymbols.map((symbol) => list.find((r) => r.symbol === symbol)).filter(Boolean) as PriceBoardRow[];
-    const rest = list.filter((r) => !pinnedSet.has(r.symbol));
-    return [...pinned, ...rest];
-  }, [rows, exchange, pinnedSymbols]);
+  const pinnedSet = useMemo(() => new Set(pinnedSymbols), [pinnedSymbols]);
+  const exchangeFilteredSet = useMemo(() => new Set(exchangeFilteredSymbols), [exchangeFilteredSymbols]);
+
+  const pinnedSymbolsForView = useMemo(() => pinnedSymbols.filter((sym) => exchangeFilteredSet.has(sym)), [
+    pinnedSymbols,
+    exchangeFilteredSet,
+  ]);
+
+  const unpinnedSymbolsForView = useMemo(
+    () => exchangeFilteredSymbols.filter((sym) => !pinnedSet.has(sym)),
+    [exchangeFilteredSymbols, pinnedSet],
+  );
 
   const searchSuggestions = useMemo(() => {
     const q = search.trim().toUpperCase();
@@ -100,6 +82,7 @@ export default function PriceBoardView() {
       prev.includes(symbol) ? prev.filter((x) => x !== symbol) : [...prev, symbol],
     );
   }, []);
+  const clearPinned = useCallback(() => setPinnedSymbols([]), []);
 
   const triggerHighlight = useCallback((symbol: string) => {
     setHighlightedSymbol(symbol);
@@ -126,16 +109,24 @@ export default function PriceBoardView() {
     }
     // TODO: khi có auth/favorite theo account, thêm symbol vào watchlist tại đây.
   }, [exchange, searchUniverse, triggerHighlight]);
+  const handleSelectPinned = useCallback((symbol: string) => {
+    handleSelectSuggestion(symbol);
+  }, [handleSelectSuggestion]);
 
   useEffect(() => {
     const pendingSymbol = pendingScrollSymbolRef.current;
     if (!pendingSymbol) return;
-    const existsInDisplay = displayRows.some((row) => row.symbol === pendingSymbol);
-    if (!existsInDisplay) return;
+    const existsInUnpinned = unpinnedSymbolsForView.includes(pendingSymbol);
+    if (!existsInUnpinned) {
+      // Nếu nằm trong pinned thì không scroll được (virtual list chỉ chứa unpinned).
+      pendingScrollSymbolRef.current = null;
+      triggerHighlight(pendingSymbol);
+      return;
+    }
     tableRef.current?.scrollToSymbol(pendingSymbol);
     pendingScrollSymbolRef.current = null;
     triggerHighlight(pendingSymbol);
-  }, [displayRows, triggerHighlight]);
+  }, [unpinnedSymbolsForView, triggerHighlight]);
 
   useEffect(() => {
     return () => {
@@ -157,11 +148,14 @@ export default function PriceBoardView() {
           onSelectSuggestion={handleSelectSuggestion}
           exchange={exchange}
           onExchangeChange={setExchange}
+          pinnedSymbols={pinnedSymbols}
+          onSelectPinned={handleSelectPinned}
+          onClearPinned={clearPinned}
         />
         <PriceBoardTable
           ref={tableRef}
-          displayRows={displayRows}
-          pinnedSymbols={pinnedSymbols}
+          pinnedSymbols={pinnedSymbolsForView}
+          unpinnedSymbols={unpinnedSymbolsForView}
           highlightedSymbol={highlightedSymbol}
           onTogglePin={togglePin}
         />

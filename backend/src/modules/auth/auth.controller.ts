@@ -120,10 +120,11 @@ export class AuthController {
       maxAge: ttlToMs(accessTtl),
       path: '/',
     });
+    // path '/' để browser gửi cookie khi gọi BFF /trade/api/gateway/auth/* (option 4a)
     res.cookie('refresh_token', refreshToken, {
       ...base,
       maxAge: ttlToMs(refreshTtl),
-      path: '/api/auth',
+      path: '/',
     });
   }
 
@@ -131,6 +132,6 @@ export class AuthController {
     const isProd = process.env.NODE_ENV === 'production';
     const base = { httpOnly: true, secure: isProd, sameSite: 'lax' as const };
     res.clearCookie('access_token', { ...base, path: '/' });
-    res.clearCookie('refresh_token', { ...base, path: '/api/auth' });
+    res.clearCookie('refresh_token', { ...base, path: '/' });
   }
 }

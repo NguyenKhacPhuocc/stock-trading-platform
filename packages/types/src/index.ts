@@ -85,10 +85,33 @@ export interface Notification {
   createdAt: string;
 }
 
-/** Body chuẩn API backend: s=status, ec=error code (0 = OK), em=error message, d=data */
 export interface ApiEnvelope<T> {
   s: 'ok' | 'error';
   ec: number;
   em: string;
   d: T | null;
 }
+
+/** Phản hồi thành công — khớp Nest `ResponseInterceptor` */
+export type ApiOkEnvelope<T> = {
+  s: 'ok';
+  ec: 0;
+  em: '';
+  d: T;
+};
+
+/** Phản hồi lỗi — khớp Nest `GlobalExceptionFilter` */
+export type ApiErrorEnvelope = {
+  s: 'error';
+  ec: number;
+  em: string;
+  d: null;
+};
+
+export type ApiResult<T> = ApiOkEnvelope<T> | ApiErrorEnvelope;
+
+/** Payload `d` của `GET .../gateway/market/board` */
+export type MarketBoardGatewayD = {
+  instruments: unknown[];
+  quotes?: unknown[];
+};

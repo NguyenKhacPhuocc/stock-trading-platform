@@ -9,6 +9,9 @@ export type PriceBoardToolbarProps = {
   onSelectSuggestion: (symbol: string) => void;
   exchange: ExchangeCode | 'ALL';
   onExchangeChange: (ex: ExchangeCode | 'ALL') => void;
+  pinnedSymbols: string[];
+  onSelectPinned: (symbol: string) => void;
+  onClearPinned: () => void;
 };
 
 export const PriceBoardToolbar = memo(function PriceBoardToolbar({
@@ -18,14 +21,23 @@ export const PriceBoardToolbar = memo(function PriceBoardToolbar({
   onSelectSuggestion,
   exchange,
   onExchangeChange,
+  pinnedSymbols,
+  onSelectPinned,
+  onClearPinned,
 }: PriceBoardToolbarProps) {
   const searchRef = useRef<HTMLDivElement | null>(null);
+  const watchlistRef = useRef<HTMLDivElement | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showWatchlist, setShowWatchlist] = useState(false);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (searchRef.current && !searchRef.current.contains(target)) {
         setShowSuggestions(false);
+      }
+      if (watchlistRef.current && !watchlistRef.current.contains(target)) {
+        setShowWatchlist(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -70,13 +82,52 @@ export const PriceBoardToolbar = memo(function PriceBoardToolbar({
             </div>
           )}
         </div>
-        <button
-          type="button"
-          className="flex items-center gap-1 rounded border border-border/80 bg-board-control px-2.5 py-1 text-xs text-muted hover:text-foreground"
-        >
-          Danh mục yêu thích
-          <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-        </button>
+        <div ref={watchlistRef} className="relative">
+          <button
+            type="button"
+            onClick={() => setShowWatchlist((v) => !v)}
+            className="flex items-center gap-1 rounded border border-border/80 bg-board-control px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          >
+            Danh mục yêu thích
+            {pinnedSymbols.length > 0 && (
+              <span className="rounded bg-white/10 px-1 text-[10px] text-foreground">{pinnedSymbols.length}</span>
+            )}
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          {showWatchlist && (
+            <div className="absolute left-0 top-[calc(100%+4px)] z-20 min-w-[180px] rounded border border-border/80 bg-board-control p-1 shadow-lg">
+              {pinnedSymbols.length === 0 ? (
+                <div className="px-2 py-1 text-xs text-muted">Chưa có mã ghim</div>
+              ) : (
+                <>
+                  {pinnedSymbols.map((symbol) => (
+                    <button
+                      key={symbol}
+                      type="button"
+                      onClick={() => {
+                        onSelectPinned(symbol);
+                        setShowWatchlist(false);
+                      }}
+                      className="block w-full rounded px-2 py-1 text-left text-xs text-foreground hover:bg-white/5"
+                    >
+                      {symbol}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClearPinned();
+                      setShowWatchlist(false);
+                    }}
+                    className="mt-1 block w-full rounded px-2 py-1 text-left text-xs text-price-down hover:bg-white/5"
+                  >
+                    Xóa toàn bộ ghim
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
         <div className="flex gap-0.5 rounded bg-board-control p-0.5">
           {(['ALL', 'HOSE', 'HNX', 'UPCOM'] as const).map((ex) => {
             const active = exchange === ex;

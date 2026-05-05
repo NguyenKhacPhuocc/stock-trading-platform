@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { ChevronDown } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
 import { clearUser, setSelectedTradingAccountId } from '@/store/slices/auth.slice';
-import { apiClient } from '@stock/utils';
+import { bffClient } from '@stock/utils';
+import { GATEWAY_AUTH } from '@/lib/gateway-paths';
 import AuthPopup from './auth-popup';
 
 export default function TradeHeader() {
@@ -47,7 +48,7 @@ export default function TradeHeader() {
 
   async function handleLogout() {
     try {
-      await apiClient.post('/auth/logout', {});
+      await bffClient.post(GATEWAY_AUTH.logout);
     } catch {
       // Cookie có thể đã hết; vẫn xóa state phía client
     }

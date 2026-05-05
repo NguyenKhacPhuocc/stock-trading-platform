@@ -7,4 +7,11 @@ const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+/** Axios instance cho BFF gateway (same-origin, không có baseURL cố định). */
+const bffClient = axios.create({
+  withCredentials: true,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+export { bffClient };
 export default apiClient;

@@ -1,6 +1,8 @@
-import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
-import { apiClient } from '@stock/utils';
-import type { PriceBoardRow } from '@/components/priceboard/price-board-types';
+import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import type { MarketBoardGatewayD } from '@stock/types';
+import { parseApiEnvelopeJson } from '@stock/utils';
+import type { ExchangeCode, PriceBoardRow } from '@/components/priceboard/price-board-types';
+import { gatewayMarketBoardPath } from '@/lib/gateway-paths';
 
 type MarketInstrumentApi = {
   stockId: string;
@@ -30,8 +32,24 @@ type MarketInstrumentApi = {
   low: number;
 };
 
+export type PriceBoardSearchItem = {
+  symbol: string;
+  exchange: ExchangeCode;
+  fullName?: string;
+};
+
+type MarketBootstrapPayload = {
+  entities: Record<string, PriceBoardRow>;
+  orderSymbols: string[];
+  exchangeBySymbol: Record<string, ExchangeCode>;
+  searchUniverse: PriceBoardSearchItem[] | null;
+};
+
 type MarketState = {
-  rows: PriceBoardRow[];
+  entities: Record<string, PriceBoardRow>;
+  orderSymbols: string[];
+  exchangeBySymbol: Record<string, ExchangeCode>;
+  searchUniverse: PriceBoardSearchItem[];
   isLoading: boolean;
   isRefreshing: boolean;
   error: string | null;
@@ -39,7 +57,10 @@ type MarketState = {
 };
 
 const initialState: MarketState = {
-  rows: [],
+  entities: {},
+  orderSymbols: [],
+  exchangeBySymbol: {},
+  searchUniverse: [],
   isLoading: false,
   isRefreshing: false,
   error: null,
@@ -77,20 +98,53 @@ function mapInstrumentToRow(item: MarketInstrumentApi): PriceBoardRow {
   };
 }
 
+function mapQuotesToSearchUniverse(payload: unknown[]): PriceBoardSearchItem[] {
+  const normalized = (payload as Array<Record<string, unknown>>)
+    .map((item) => ({
+      symbol: String(item.symbol ?? '').toUpperCase(),
+      exchange: String(item.exchange ?? '').toUpperCase() as ExchangeCode,
+      fullName: typeof item.fullName === 'string' ? item.fullName : undefined,
+    }))
+    .filter((item) => item.symbol && item.exchange)
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return normalized;
+}
+
+type MarketThunkGetState = () => { market: MarketState };
+
 export const fetchMarketRows = createAsyncThunk<
-  PriceBoardRow[],
+  MarketBootstrapPayload,
   { exchange?: 'HOSE' | 'HNX' | 'UPCOM' | 'ALL' } | undefined,
-  { rejectValue: string }
->('market/fetchRows', async (params, { rejectWithValue }) => {
+  { rejectValue: string; state: ReturnType<MarketThunkGetState> }
+>('market/fetchRows', async (params, { rejectWithValue, getState }) => {
   try {
     const exchange = params?.exchange;
-    const res = await apiClient.get('/market/instruments', {
-      params: exchange && exchange !== 'ALL' ? { exchange } : undefined,
+    const loadQuotes = getState().market.searchUniverse.length === 0;
+    const path = gatewayMarketBoardPath({
+      exchange: exchange && exchange !== 'ALL' ? exchange : undefined,
+      withQuotes: loadQuotes,
     });
-    const payload = Array.isArray(res.data) ? res.data : Array.isArray(res.data?.d) ? res.data.d : [];
-    const rows = (payload as MarketInstrumentApi[]).map(mapInstrumentToRow);
-    rows.sort((a, b) => a.symbol.localeCompare(b.symbol));
-    return rows;
+    const res = await fetch(path, { credentials: 'same-origin' });
+    const parsed = parseApiEnvelopeJson<MarketBoardGatewayD>(await res.json());
+    if (!parsed.ok) return rejectWithValue(parsed.em);
+    if (!res.ok) return rejectWithValue('Không tải được dữ liệu bảng giá');
+
+    const instruments = Array.isArray(parsed.d.instruments) ? parsed.d.instruments : [];
+    const entities: Record<string, PriceBoardRow> = {};
+    const orderSymbols: string[] = [];
+    const exchangeBySymbol: Record<string, ExchangeCode> = {};
+    (instruments as MarketInstrumentApi[]).forEach((item) => {
+      const row = mapInstrumentToRow(item);
+      entities[row.symbol] = row;
+      orderSymbols.push(row.symbol);
+      exchangeBySymbol[row.symbol] = row.exchange;
+    });
+    orderSymbols.sort((a, b) => a.localeCompare(b));
+
+    const quotes = parsed.d.quotes;
+    const searchUniverse = Array.isArray(quotes) ? mapQuotesToSearchUniverse(quotes) : null;
+
+    return { entities, orderSymbols, exchangeBySymbol, searchUniverse };
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Không tải được dữ liệu bảng giá';
     return rejectWithValue(message);
@@ -100,16 +154,49 @@ export const fetchMarketRows = createAsyncThunk<
 const marketSlice = createSlice({
   name: 'market',
   initialState,
-  reducers: {},
+  reducers: {
+    /**
+     * Socket tick update: patch đúng symbol, không recreate toàn bộ dataset.
+     * Giả định patch có thể chứa partial top-level hoặc partial nested (bid3/match/ask...).
+     */
+    batchPatchRows: (
+      state,
+      action: PayloadAction<Array<{ symbol: string; patch: Partial<PriceBoardRow> }>>,
+    ) => {
+      for (const { symbol, patch } of action.payload) {
+        const current = state.entities[symbol];
+        if (!current) continue;
+
+        const next: PriceBoardRow = {
+          ...current,
+          ...patch,
+          bid3: patch.bid3 ? { ...current.bid3, ...patch.bid3 } : current.bid3,
+          bid2: patch.bid2 ? { ...current.bid2, ...patch.bid2 } : current.bid2,
+          bid1: patch.bid1 ? { ...current.bid1, ...patch.bid1 } : current.bid1,
+          match: patch.match ? { ...current.match, ...patch.match } : current.match,
+          ask1: patch.ask1 ? { ...current.ask1, ...patch.ask1 } : current.ask1,
+          ask2: patch.ask2 ? { ...current.ask2, ...patch.ask2 } : current.ask2,
+          ask3: patch.ask3 ? { ...current.ask3, ...patch.ask3 } : current.ask3,
+        };
+
+        state.entities[symbol] = next;
+      }
+    },
+  },
   extraReducers: (builder) => {
     builder
       .addCase(fetchMarketRows.pending, (state) => {
         state.error = null;
-        if (state.rows.length === 0) state.isLoading = true;
+        if (state.orderSymbols.length === 0) state.isLoading = true;
         else state.isRefreshing = true;
       })
       .addCase(fetchMarketRows.fulfilled, (state, action) => {
-        state.rows = action.payload;
+        state.entities = action.payload.entities;
+        state.orderSymbols = action.payload.orderSymbols;
+        state.exchangeBySymbol = action.payload.exchangeBySymbol;
+        if (action.payload.searchUniverse !== null) {
+          state.searchUniverse = action.payload.searchUniverse;
+        }
         state.isLoading = false;
         state.isRefreshing = false;
         state.lastSyncedAt = Date.now();
@@ -122,5 +209,5 @@ const marketSlice = createSlice({
   },
 });
 
+export const { batchPatchRows } = marketSlice.actions;
 export default marketSlice.reducer;
-

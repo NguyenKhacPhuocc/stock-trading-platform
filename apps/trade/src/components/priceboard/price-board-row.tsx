@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { PinIcon } from 'lucide-react';
 import type { PriceBoardRow as PriceBoardRowData } from './price-board-types';
+import { useAppSelector } from '@/store/hooks';
 import { PriceBoardCell } from './price-board-cell';
 import { chgTone, formatInt, formatPrice, priceBoardGridStyle, toneFromPrice, type PriceTone } from './price-board-utils';
 
@@ -20,15 +21,26 @@ function toneTextClass(t: PriceTone): string {
 }
 
 export type PriceBoardRowProps = {
-  row: PriceBoardRowData;
+  symbol: string;
   isPinned: boolean;
   isHighlighted?: boolean;
-  onTogglePin: () => void;
+  onTogglePin: (symbol: string) => void;
   showPinnedBandBottom?: boolean;
 };
 
 export const PriceBoardRow = memo(
-  function PriceBoardRowView({ row: r, isPinned, isHighlighted = false, onTogglePin, showPinnedBandBottom }: PriceBoardRowProps) {
+  function PriceBoardRowView({ symbol, isPinned, isHighlighted = false, onTogglePin, showPinnedBandBottom }: PriceBoardRowProps) {
+    const r: PriceBoardRowData | undefined = useAppSelector((s) => s.market.entities[symbol]);
+
+    if (!r) {
+      return (
+        <div
+          className={`group/row grid ${showPinnedBandBottom ? 'border-b-2 border-board-pin-band' : ''} ${isHighlighted ? 'price-row-highlight' : ''}`}
+          style={priceBoardGridStyle}
+        />
+      );
+    }
+
     const ref = r.ref;
     const ceil = r.ceil;
     const floor = r.floor;
@@ -61,7 +73,7 @@ export const PriceBoardRow = memo(
               className={`h-4 w-4 shrink-0 cursor-pointer text-muted ${isPinned ? 'rotate-45 text-price-down' : ''}`}
               onDoubleClick={(e) => {
                 e.stopPropagation();
-                onTogglePin();
+                onTogglePin(symbol);
               }}
               aria-label="Ghim mã — double click"
             />
@@ -104,10 +116,10 @@ export const PriceBoardRow = memo(
     );
   },
   (prev, next) =>
-    prev.row === next.row &&
+    prev.symbol === next.symbol &&
     prev.isPinned === next.isPinned &&
     prev.isHighlighted === next.isHighlighted &&
-    prev.showPinnedBandBottom === next.showPinnedBandBottom,
+    prev.showPinnedBandBottom === next.showPinnedBandBottom
 );
 
 PriceBoardRow.displayName = 'PriceBoardRow';

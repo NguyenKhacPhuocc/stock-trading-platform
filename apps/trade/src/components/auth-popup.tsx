@@ -7,7 +7,8 @@ import { useRouter } from 'next/navigation';
 import { useAppDispatch } from '@/store/hooks';
 import { setSession } from '@/store/slices/auth.slice';
 import { fetchAuthenticatedSession } from '@/lib/fetch-auth-session';
-import { apiClient } from '@stock/utils';
+import { GATEWAY_AUTH } from '@/lib/gateway-paths';
+import { bffClient } from '@stock/utils';
 import { APP_CONFIG } from '@/config/app.config';
 
 // ─── AuthPopup ───────────────────────────────────────────────────────────────
@@ -80,7 +81,8 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
     setLoading(true);
     try {
       if (currentMode === 'login') {
-        await apiClient.post('/auth/login', loginForm);
+        const res = await bffClient.post(GATEWAY_AUTH.login, loginForm);
+        if (!res.data?.d?.user) throw new Error('Không tải được thông tin người dùng sau đăng nhập');
         const session = await fetchAuthenticatedSession();
         if (session) dispatch(setSession(session));
         else throw new Error('Không tải được session sau đăng nhập');
@@ -97,11 +99,8 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
           dateOfBirth: registerForm.dateOfBirth || undefined,
           address: registerForm.address || undefined,
         };
-        const res = await apiClient.post('/auth/register', payload);
-        const result = res.data?.d as {
-          custId?: string;
-          defaultAccountId?: string;
-        } | null;
+        const res = await bffClient.post(GATEWAY_AUTH.register, payload);
+        const result = res.data?.d as { custId?: string; defaultAccountId?: string } | null;
         if (!result?.custId || !result?.defaultAccountId) {
           throw new Error('Thiếu custId / defaultAccountId trong phản hồi');
         }
@@ -115,7 +114,7 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
     } catch (err: unknown) {
       const errData = (err as { response?: { data?: { em?: string; message?: string } } })?.response
         ?.data;
-      const msg = errData?.em ?? errData?.message;
+      const msg = errData?.em ?? errData?.message ?? (err as Error)?.message;
       setError(msg || (currentMode === 'login' ? 'Đăng nhập thất bại' : 'Đăng ký thất bại'));
     } finally {
       setLoading(false);

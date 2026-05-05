@@ -1,13 +1,12 @@
 import { forwardRef, type ForwardedRef, type MutableRefObject, memo, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { List, type ListImperativeAPI, type RowComponentProps, useListRef } from 'react-window';
-import type { PriceBoardRow } from './price-board-types';
 import { PriceBoardRow as BoardRow } from './price-board-row';
 import { PriceBoardTableHeader } from './price-board-table-header';
 
 export type PriceBoardTableProps = {
-  displayRows: PriceBoardRow[];
   pinnedSymbols: string[];
+  unpinnedSymbols: string[];
   highlightedSymbol: string | null;
   onTogglePin: (symbol: string) => void;
 };
@@ -21,7 +20,7 @@ export type PriceBoardTableHandle = {
 };
 
 type VirtualRowData = {
-  rows: PriceBoardRow[];
+  unpinnedSymbols: string[];
   highlightedSymbol: string | null;
   onTogglePin: (symbol: string) => void;
 };
@@ -29,43 +28,32 @@ type VirtualRowData = {
 function VirtualRow({
   index,
   style,
-  rows,
+  unpinnedSymbols,
   highlightedSymbol,
   onTogglePin,
 }: RowComponentProps<VirtualRowData>) {
-  const row = rows[index];
-  if (!row) return null;
+  const symbol = unpinnedSymbols[index];
+  if (!symbol) return null;
   return (
     <div style={style as CSSProperties}>
       <BoardRow
-        key={row.symbol}
-        row={row}
+        key={symbol}
+        symbol={symbol}
         isPinned={false}
-        isHighlighted={highlightedSymbol === row.symbol}
-        onTogglePin={() => onTogglePin(row.symbol)}
+        isHighlighted={highlightedSymbol === symbol}
+        onTogglePin={onTogglePin}
       />
     </div>
   );
 }
 
 const PriceBoardTableInner = (
-  { displayRows, pinnedSymbols, highlightedSymbol, onTogglePin }: PriceBoardTableProps,
+  { pinnedSymbols, unpinnedSymbols, highlightedSymbol, onTogglePin }: PriceBoardTableProps,
   ref: ForwardedRef<PriceBoardTableHandle>,
 ) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const listRef = useListRef(null) as MutableRefObject<ListImperativeAPI | null>;
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
-  const pinnedSet = useMemo(() => new Set(pinnedSymbols), [pinnedSymbols]);
-
-  const pinnedRows = useMemo(
-    () => pinnedSymbols.map((symbol) => displayRows.find((r) => r.symbol === symbol)).filter(Boolean) as PriceBoardRow[],
-    [displayRows, pinnedSymbols],
-  );
-
-  const unpinnedRows = useMemo(
-    () => displayRows.filter((r) => !pinnedSet.has(r.symbol)),
-    [displayRows, pinnedSet],
-  );
 
   useEffect(() => {
     const node = containerRef.current;
@@ -84,24 +72,25 @@ const PriceBoardTableInner = (
     return () => observer.disconnect();
   }, []);
 
-  const pinnedHeight = pinnedRows.length * ROW_HEIGHT;
+  const pinnedHeight = pinnedSymbols.length * ROW_HEIGHT;
   const listHeight = Math.max(
     viewportSize.height - HEADER_HEIGHT - pinnedHeight,
     ROW_HEIGHT,
   );
   const listWidth = Math.max(viewportSize.width, TABLE_MIN_WIDTH);
-  const virtualData = useMemo(
-    () => ({ rows: unpinnedRows, highlightedSymbol, onTogglePin }),
-    [highlightedSymbol, onTogglePin, unpinnedRows],
-  );
+  const virtualData = useMemo(() => ({ unpinnedSymbols, highlightedSymbol, onTogglePin }), [
+    unpinnedSymbols,
+    highlightedSymbol,
+    onTogglePin,
+  ]);
 
   useImperativeHandle(ref, () => ({
     scrollToSymbol: (symbol: string) => {
-      const index = unpinnedRows.findIndex((row) => row.symbol === symbol);
+      const index = unpinnedSymbols.findIndex((s) => s === symbol);
       if (index < 0) return;
       listRef.current?.scrollToRow({ index, align: 'start', behavior: 'instant' });
     },
-  }), [listRef, unpinnedRows]);
+  }), [listRef, unpinnedSymbols]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-board-bg">
@@ -111,14 +100,14 @@ const PriceBoardTableInner = (
       >
         <div className="h-full min-w-[1180px]">
           <PriceBoardTableHeader />
-          {pinnedRows.map((row, i) => (
+          {pinnedSymbols.map((symbol, i) => (
             <BoardRow
-              key={row.symbol}
-              row={row}
+              key={symbol}
+              symbol={symbol}
               isPinned
-              isHighlighted={highlightedSymbol === row.symbol}
-              onTogglePin={() => onTogglePin(row.symbol)}
-              showPinnedBandBottom={i === pinnedRows.length - 1 && unpinnedRows.length > 0}
+              isHighlighted={highlightedSymbol === symbol}
+              onTogglePin={onTogglePin}
+              showPinnedBandBottom={i === pinnedSymbols.length - 1 && unpinnedSymbols.length > 0}
             />
           ))}
           {viewportSize.width > 0 && viewportSize.height > 0 && (
@@ -126,7 +115,7 @@ const PriceBoardTableInner = (
               listRef={listRef}
               className="price-board-virtual-list"
               style={{ width: listWidth, height: listHeight, overflowX: 'hidden' }}
-              rowCount={unpinnedRows.length}
+              rowCount={unpinnedSymbols.length}
               rowHeight={ROW_HEIGHT}
               rowComponent={VirtualRow}
               rowProps={virtualData}
