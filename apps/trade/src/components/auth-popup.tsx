@@ -55,6 +55,9 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
   function switchMode(m: 'login' | 'register') {
     setCurrentMode(m);
     setError('');
+    // Khi đổi tab phải quay lại form tương ứng, không giữ màn hình "đăng ký thành công".
+    setRegisterDone(null);
+    setCopied(false);
     onSwitchMode?.(m);
   }
 
@@ -180,7 +183,7 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
 
                   <div className="rounded-lg px-4 py-4 text-center border border-border bg-surface-2">
                     <p className="text-xs mb-2 text-muted">
-                      CustId (mã khách — dùng đăng nhập)
+                      Mã khách hàng — dùng đăng nhập
                     </p>
                     <p className="text-2xl font-bold tracking-widest select-all text-foreground font-mono">
                       {registerDone.custId}
@@ -192,15 +195,15 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
                   </div>
 
                   <p className="text-xs text-center text-muted">
-                    Lưu custId để đăng nhập; giao dịch gắn với số tiểu khoản (.1, .5…).
+                    Lưu mã khách hàng để đăng nhập; giao dịch gắn với số tiểu khoản (.1, .5…).
                   </p>
 
                   <button
                     type="button"
-                    onClick={() => handleCopy(`${registerDone.custId}\n${registerDone.defaultAccountId}`)}
+                    onClick={() => handleCopy(registerDone.custId)}
                     className="w-full py-2 rounded text-sm font-medium border border-border text-foreground bg-transparent transition-opacity"
                   >
-                    {copied ? 'Đã copy ✓' : 'Sao chép custId + TK .1'}
+                    {copied ? 'Đã copy ✓' : 'Sao chép mã khách hàng'}
                   </button>
 
                   {registerDone.hadEmail ? (

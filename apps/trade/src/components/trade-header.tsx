@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { ChevronDown } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
 import { clearUser, setSelectedTradingAccountId } from '@/store/slices/auth.slice';
@@ -12,6 +12,7 @@ import AuthPopup from './auth-popup';
 
 export default function TradeHeader() {
   const router = useRouter();
+  const pathname = usePathname();
   const dispatch = useAppDispatch();
   const user = useAppSelector((s) => s.auth.user);
   const tradingAccounts = useAppSelector((s) => s.auth.tradingAccounts);
@@ -57,6 +58,23 @@ export default function TradeHeader() {
     router.refresh();
   }
 
+  function isNavActive(route: '/priceboard' | '/portfolio' | '/order'): boolean {
+    const normalized = pathname.startsWith('/trade') ? pathname.slice('/trade'.length) || '/' : pathname;
+    if (route === '/priceboard') {
+      return normalized === '/' || normalized.startsWith('/priceboard');
+    }
+    return normalized.startsWith(route);
+  }
+
+  function navLinkClass(route: '/priceboard' | '/portfolio' | '/order'): string {
+    const active = isNavActive(route);
+    return `inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-medium transition-all duration-200 ${
+      active
+        ? 'bg-primary text-black shadow-[0_6px_18px_rgba(33,206,60,0.35)]'
+        : 'border border-transparent text-muted hover:bg-white/[0.04] hover:text-foreground'
+    }`;
+  }
+
   return (
     <>
       <header
@@ -74,13 +92,13 @@ export default function TradeHeader() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-4 text-xs">
-            <Link href="/priceboard" className="px-2 py-1" style={{ color: 'var(--foreground)' }}>
+            <Link href="/priceboard" className={navLinkClass('/priceboard')}>
               Bảng giá
             </Link>
-            <Link href="/portfolio" className="px-2 py-1" style={{ color: 'var(--muted)' }}>
+            <Link href="/portfolio" className={navLinkClass('/portfolio')}>
               Danh mục
             </Link>
-            <Link href="/order" className="px-2 py-1" style={{ color: 'var(--muted)' }}>
+            <Link href="/order" className={navLinkClass('/order')}>
               Đặt lệnh
             </Link>
           </nav>
