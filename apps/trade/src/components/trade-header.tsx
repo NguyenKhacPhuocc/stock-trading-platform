@@ -98,9 +98,19 @@ export default function TradeHeader() {
             <Link href="/portfolio" className={navLinkClass('/portfolio')}>
               Danh mục
             </Link>
-            <Link href="/order" className={navLinkClass('/order')}>
-              Đặt lệnh
-            </Link>
+            {!user ? (
+              <button
+                type="button"
+                onClick={() => setAuthModal('login')}
+                className={navLinkClass('/order')}
+              >
+                Đặt lệnh
+              </button>
+            ) : (
+              <Link href="/order" className={navLinkClass('/order')}>
+                Đặt lệnh
+              </Link>
+            )}
           </nav>
         </div>
 

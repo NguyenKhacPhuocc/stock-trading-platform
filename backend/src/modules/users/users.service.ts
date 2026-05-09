@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -7,6 +7,7 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { tradingAccountStatusToApi } from '../../common/const';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { BusinessException } from '../../common/errors/business.exception';
 
 @Injectable()
 export class UsersService {
@@ -59,8 +60,17 @@ export class UsersService {
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
     const user = await this.userRepo.findOne({ where: { id: userId } });
-    const valid = await bcrypt.compare(dto.currentPassword, user!.passwordHash);
-    if (!valid) throw new BadRequestException('Mật khẩu hiện tại không đúng');
+    if (!user) {
+      throw new BusinessException(
+        'AUTH_INVALID_TOKEN',
+        undefined,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!valid) {
+      throw new BusinessException('CURRENT_PASSWORD_INVALID');
+    }
 
     const newHash = await bcrypt.hash(dto.newPassword, 10);
     await this.userRepo.update(userId, { passwordHash: newHash });

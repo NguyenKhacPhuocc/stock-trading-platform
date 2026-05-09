@@ -37,11 +37,12 @@ export interface PriceHistory {
 
 export interface Order {
   id: string;
+  orderCode: string | null;
   tradingAccountId: string;
   stockId: string;
   side: OrderSide;
   orderType: OrderType;
-  price?: number;
+  price: number | null;
   quantity: number;
   matchedQty: number;
   status: OrderStatus;
@@ -87,7 +88,7 @@ export interface Notification {
 
 export interface ApiEnvelope<T> {
   s: 'ok' | 'error';
-  ec: number;
+  ec: number | string;
   em: string;
   d: T | null;
 }
@@ -103,12 +104,19 @@ export type ApiOkEnvelope<T> = {
 /** Phản hồi lỗi — khớp Nest `GlobalExceptionFilter` */
 export type ApiErrorEnvelope = {
   s: 'error';
-  ec: number;
+  ec: number | string;
   em: string;
   d: null;
 };
 
 export type ApiResult<T> = ApiOkEnvelope<T> | ApiErrorEnvelope;
+
+export type RealtimeEnvelope<TData = unknown> = {
+  type: string;
+  seq: number;
+  ts: string;
+  data: TData;
+};
 
 /** Payload `d` của `GET .../gateway/market/board` */
 export type MarketBoardGatewayD = {

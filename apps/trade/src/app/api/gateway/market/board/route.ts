@@ -1,17 +1,13 @@
 import { NextRequest } from 'next/server';
 import { gwResError, gwResSuccess, unwrapNestArrayPayload } from '@/lib/gateway-envelope';
+import { gatewayBackendOrigin, gatewayUpstreamCatch } from '@/lib/gateway-internal';
 
 const MARKET_TIMEOUT_MS = 15_000;
-
-function backendOrigin(): string {
-  const raw = process.env.BACKEND_INTERNAL_URL ?? 'http://127.0.0.1:3002';
-  return raw.replace(/\/$/, '');
-}
 
 export async function GET(req: NextRequest) {
   const exchange = req.nextUrl.searchParams.get('exchange') ?? undefined;
   const withQuotes = req.nextUrl.searchParams.get('quote') === 'true';
-  const origin = backendOrigin();
+  const origin = gatewayBackendOrigin();
 
   const insUrl = new URL(`${origin}/api/market/instruments`);
   if (exchange && exchange !== 'ALL') insUrl.searchParams.set('exchange', exchange);
@@ -60,9 +56,10 @@ export async function GET(req: NextRequest) {
 
     return gwResSuccess({ instruments, quotes });
   } catch (e) {
-    const aborted = e instanceof Error && e.name === 'AbortError';
-    const em = aborted ? 'Hết thời gian chờ dữ liệu thị trường' : 'Lỗi kết nối tới máy chủ nội bộ';
-    return gwResError(em, { httpStatus: 504, ec: 504 });
+    return gatewayUpstreamCatch(e, {
+      timeout: 'Hết thời gian chờ dữ liệu thị trường',
+      connect: 'Lỗi kết nối tới máy chủ nội bộ',
+    });
   } finally {
     clearTimeout(timer);
   }

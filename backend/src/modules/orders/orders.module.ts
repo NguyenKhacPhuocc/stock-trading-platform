@@ -4,13 +4,24 @@ import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { Order } from '../../database/entities/order.entity';
 import { Stock } from '../../database/entities/stock.entity';
-import { PriceHistory } from '../../database/entities/price-history.entity';
+import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
+import { Position } from '../../database/entities/position.entity';
+import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { MarketModule } from '../market/market.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, Stock, PriceHistory, TradingAccount]),
+    TypeOrmModule.forFeature([
+      Order,
+      Stock,
+      StockBoardSnapshot,
+      TradingAccount,
+      Wallet,
+      Position,
+      CashTransaction,
+    ]),
     MarketModule,
   ],
   providers: [OrdersService],

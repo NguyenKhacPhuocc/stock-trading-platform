@@ -22,6 +22,8 @@ type OrderEntryPanelProps = {
   triggerPrice: string;
   onTriggerPriceChange: (value: string) => void;
   canSubmit: boolean;
+  isSubmitting?: boolean;
+  onSubmitOrder: () => void;
 };
 
 export function OrderEntryPanel({
@@ -46,6 +48,8 @@ export function OrderEntryPanel({
   triggerPrice,
   onTriggerPriceChange,
   canSubmit,
+  isSubmitting = false,
+  onSubmitOrder,
 }: OrderEntryPanelProps) {
   return (
     <section className={`${panelCardClassName} min-h-[260px]`}>
@@ -167,10 +171,13 @@ export function OrderEntryPanel({
 
         <button
           type="button"
-          disabled={!canSubmit}
+          disabled={!canSubmit || isSubmitting}
+          onClick={onSubmitOrder}
           className="w-full rounded bg-primary py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {orderEntryTab === 'regular'
+          {isSubmitting
+            ? 'Đang gửi lệnh...'
+            : orderEntryTab === 'regular'
             ? orderSide === 'buy'
               ? 'Xác nhận mua'
               : 'Xác nhận bán'

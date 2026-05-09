@@ -19,13 +19,14 @@ export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartP
   const orderSymbols = useAppSelector((s) => s.market.orderSymbols);
   const searchUniverse = useAppSelector((s) => s.market.searchUniverse);
 
-  const [exchange, setExchange] = useState<ExchangeCode | 'ALL'>('ALL');
+  const [exchange, setExchange] = useState<ExchangeCode | 'ALL'>('HOSE');
   const [search, setSearch] = useState('');
   const [pinnedSymbols, setPinnedSymbols] = useState<string[]>([]);
 
   useEffect(() => {
+    if (tab !== 'board') return;
     void dispatch(fetchMarketRows({ exchange }));
-  }, [dispatch, exchange]);
+  }, [dispatch, exchange, tab]);
 
   const exchangeFilteredSymbols = useMemo(() => {
     if (exchange === 'ALL') return orderSymbols;

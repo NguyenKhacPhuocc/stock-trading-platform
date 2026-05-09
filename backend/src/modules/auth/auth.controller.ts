@@ -8,7 +8,6 @@ import {
   HttpStatus,
   UseGuards,
   Get,
-  UnauthorizedException,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -21,6 +20,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User } from '../../database/entities/user.entity';
 import { ttlToMs } from './auth-token.util';
 import { ConfigService } from '@nestjs/config';
+import { BusinessException } from '../../common/errors/business.exception';
 
 @Controller('auth')
 export class AuthController {
@@ -62,7 +62,11 @@ export class AuthController {
         ? req.cookies.refresh_token
         : undefined) ?? dto.refreshToken;
     if (!plain?.trim()) {
-      throw new UnauthorizedException('Thiếu refresh token');
+      throw new BusinessException(
+        'AUTH_REFRESH_TOKEN_MISSING',
+        undefined,
+        HttpStatus.UNAUTHORIZED,
+      );
     }
     const result: AuthTokensPayload = await this.authService.rotateRefreshPair(
       plain.trim(),

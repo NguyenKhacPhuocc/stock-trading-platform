@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
+import { BusinessException } from '../../common/errors/business.exception';
 
 @Injectable()
 export class WalletService {
@@ -19,8 +20,9 @@ export class WalletService {
     const account = await this.accountRepo.findOne({
       where: { userId, isDefault: true },
     });
-    if (!account)
-      throw new NotFoundException('Không tìm thấy tài khoản giao dịch');
+    if (!account) {
+      throw new BusinessException('TRADING_ACCOUNT_NOT_FOUND', undefined, 404);
+    }
     return account;
   }
 
@@ -31,7 +33,9 @@ export class WalletService {
       relations: { transactions: true },
       order: { transactions: { createdAt: 'DESC' } },
     });
-    if (!wallet) throw new NotFoundException('Không tìm thấy ví');
+    if (!wallet) {
+      throw new BusinessException('WALLET_NOT_FOUND', undefined, 404);
+    }
     const available = Number(wallet.availableBalance);
     const locked = Number(wallet.lockedBalance);
     return {

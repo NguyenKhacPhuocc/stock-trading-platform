@@ -1,19 +1,15 @@
 import { NextRequest } from 'next/server';
 import { appendSetCookies, gwResError, gwResSuccess } from '@/lib/gateway-envelope';
+import { gatewayBackendOrigin, gatewayUpstreamCatch } from '@/lib/gateway-internal';
 
 const AUTH_TIMEOUT_MS = 10_000;
-
-function backendOrigin(): string {
-  const raw = process.env.BACKEND_INTERNAL_URL ?? 'http://127.0.0.1:3002';
-  return raw.replace(/\/?$/, '');
-}
 
 export async function POST(req: NextRequest) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), AUTH_TIMEOUT_MS);
 
   try {
-    const nestRes = await fetch(`${backendOrigin()}/api/auth/logout`, {
+    const nestRes = await fetch(`${gatewayBackendOrigin()}/api/auth/logout`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -37,9 +33,10 @@ export async function POST(req: NextRequest) {
     appendSetCookies(bffRes, nestRes.headers);
     return bffRes;
   } catch (e) {
-    const aborted = e instanceof Error && e.name === 'AbortError';
-    const em = aborted ? 'Hết thời gian chờ đăng xuất' : 'Lỗi kết nối tới máy chủ';
-    return gwResError(em, { httpStatus: 504, ec: 504 });
+    return gatewayUpstreamCatch(e, {
+      timeout: 'Hết thời gian chờ đăng xuất',
+      connect: 'Lỗi kết nối tới máy chủ',
+    });
   } finally {
     clearTimeout(timer);
   }

@@ -41,6 +41,7 @@ interface AuthState {
   tradingAccounts: TradingAccountSummary[];
   selectedTradingAccountId: string | null;
   isAuthenticated: boolean;
+  isHydratingSession: boolean;
 }
 
 const initialState: AuthState = {
@@ -48,6 +49,7 @@ const initialState: AuthState = {
   tradingAccounts: [],
   selectedTradingAccountId: null,
   isAuthenticated: false,
+  isHydratingSession: true,
 };
 
 const authSlice = createSlice({
@@ -67,6 +69,7 @@ const authSlice = createSlice({
         action.payload.tradingAccounts,
       );
       state.isAuthenticated = true;
+      state.isHydratingSession = false;
     },
     setSelectedTradingAccountId(state, action: PayloadAction<string>) {
       if (state.tradingAccounts.some((a) => a.id === action.payload)) {
@@ -78,10 +81,19 @@ const authSlice = createSlice({
       state.tradingAccounts = [];
       state.selectedTradingAccountId = null;
       state.isAuthenticated = false;
+      state.isHydratingSession = false;
+    },
+    finishHydratingSession(state) {
+      state.isHydratingSession = false;
     },
   },
 });
 
-export const { setSession, setSelectedTradingAccountId, clearUser } =
+export const {
+  setSession,
+  setSelectedTradingAccountId,
+  clearUser,
+  finishHydratingSession,
+} =
   authSlice.actions;
 export default authSlice.reducer;

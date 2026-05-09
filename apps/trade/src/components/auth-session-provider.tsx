@@ -2,8 +2,21 @@
 
 import { useEffect } from 'react';
 import { useAppDispatch } from '@/store/hooks';
-import { setSession } from '@/store/slices/auth.slice';
+import { finishHydratingSession, setSession } from '@/store/slices/auth.slice';
 import { fetchAuthenticatedSession } from '@/lib/fetch-auth-session';
+
+let inflightSessionHydration: ReturnType<
+  typeof fetchAuthenticatedSession
+> | null = null;
+
+async function fetchAuthenticatedSessionOnce() {
+  if (!inflightSessionHydration) {
+    inflightSessionHydration = fetchAuthenticatedSession().finally(() => {
+      inflightSessionHydration = null;
+    });
+  }
+  return inflightSessionHydration;
+}
 
 /**
  * Sau F5: GET /auth/me + GET /users/me/accounts → Redux.
@@ -16,10 +29,12 @@ export default function AuthSessionProvider({ children }: { children: React.Reac
     let cancelled = false;
     (async () => {
       try {
-        const session = await fetchAuthenticatedSession();
+        const session = await fetchAuthenticatedSessionOnce();
         if (!cancelled && session) dispatch(setSession(session));
       } catch {
         // 401 / lỗi mạng: không clearUser — tránh race với login; sau F5 Redux đã null
+      } finally {
+        if (!cancelled) dispatch(finishHydratingSession());
       }
     })();
     return () => {

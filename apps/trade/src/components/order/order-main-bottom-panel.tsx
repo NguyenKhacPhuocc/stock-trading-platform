@@ -4,12 +4,31 @@ type OrderMainBottomPanelProps = {
   panelCardClassName: string;
   bottomTab: BottomTab;
   onBottomTabChange: (tab: BottomTab) => void;
+  orders: Array<{
+    id: string;
+    orderCode: string;
+    side: 'buy' | 'sell';
+    symbol: string;
+    quantity: number;
+    matchedQty: number;
+    price: number | null;
+    orderType: string;
+    status: string;
+    accountId: string;
+  }>;
+  isLoadingOrders: boolean;
+  onCancelOrder: (id: string) => void;
+  cancellingOrderId?: string | null;
 };
 
 export function OrderMainBottomPanel({
   panelCardClassName,
   bottomTab,
   onBottomTabChange,
+  orders,
+  isLoadingOrders,
+  onCancelOrder,
+  cancellingOrderId = null,
 }: OrderMainBottomPanelProps) {
   return (
     <div className={`${panelCardClassName} min-h-0 overflow-hidden xl:col-span-2`}>
@@ -52,6 +71,7 @@ export function OrderMainBottomPanel({
             <thead className="bg-[#11141b] text-muted">
               <tr>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Sửa/Hủy</th>
+                <th className="border-b border-border px-2 py-2 text-left font-medium">Mã lệnh</th>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Mua/Bán</th>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Số tài khoản</th>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Mã CK</th>
@@ -64,11 +84,54 @@ export function OrderMainBottomPanel({
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td colSpan={10} className="px-2 py-8 text-center text-muted">
-                  Chưa có dữ liệu sổ lệnh. Bước tiếp theo sẽ nối API orders.
-                </td>
-              </tr>
+              {isLoadingOrders ? (
+                <tr>
+                  <td colSpan={11} className="px-2 py-8 text-center text-muted">
+                    Đang tải danh sách lệnh...
+                  </td>
+                </tr>
+              ) : orders.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="px-2 py-8 text-center text-muted">
+                    Chưa có dữ liệu sổ lệnh.
+                  </td>
+                </tr>
+              ) : (
+                orders.map((order) => (
+                  <tr key={order.id} className="border-b border-border/60">
+                    <td className="px-2 py-2">
+                      {order.status === 'pending' ? (
+                        <button
+                          type="button"
+                          onClick={() => onCancelOrder(order.id)}
+                          disabled={cancellingOrderId === order.id}
+                          className="rounded border border-border px-2 py-1 text-[11px] text-muted hover:text-foreground disabled:opacity-60"
+                        >
+                          {cancellingOrderId === order.id ? 'Đang hủy...' : 'Hủy'}
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-muted">--</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 font-mono text-[11px]">{order.orderCode || '--'}</td>
+                    <td className={`px-2 py-2 ${order.side === 'buy' ? 'text-primary' : 'text-price-down'}`}>
+                      {order.side === 'buy' ? 'Mua' : 'Bán'}
+                    </td>
+                    <td className="px-2 py-2">{order.accountId}</td>
+                    <td className="px-2 py-2 font-medium">{order.symbol}</td>
+                    <td className="px-2 py-2 text-right">{order.quantity.toLocaleString('vi-VN')}</td>
+                    <td className="px-2 py-2 text-right">
+                      {typeof order.price === 'number' ? order.price.toLocaleString('vi-VN') : '--'}
+                    </td>
+                    <td className="px-2 py-2">{order.orderType}</td>
+                    <td className="px-2 py-2">{order.status}</td>
+                    <td className="px-2 py-2 text-right">{order.matchedQty.toLocaleString('vi-VN')}</td>
+                    <td className="px-2 py-2 text-right">
+                      --
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         )}

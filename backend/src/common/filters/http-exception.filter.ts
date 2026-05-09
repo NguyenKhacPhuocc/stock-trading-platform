@@ -7,11 +7,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import type { AppErrorKey } from '../errors/error-const';
+import { resolveAppError } from '../errors/error-message';
 
 /** Lỗi cùng envelope: s ≠ ok, ec mã lỗi (thường = HTTP status), em = thông báo */
 export type ApiErrorEnvelope = {
   s: 'error';
-  ec: number;
+  ec: number | string;
   em: string;
   d: null;
 };
@@ -42,14 +44,54 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       );
     }
 
-    const body: ApiErrorEnvelope = {
-      s: 'error',
-      ec: status,
-      em: this.extractMessage(rawMessage),
-      d: null,
-    };
+    const body = this.buildErrorEnvelope({
+      status,
+      request,
+      source: rawMessage,
+    });
 
     response.status(status).json(body);
+  }
+
+  private buildErrorEnvelope(args: {
+    status: number;
+    request: Request;
+    source: unknown;
+  }): ApiErrorEnvelope {
+    const locale = this.resolveLocale(args.request);
+    if (typeof args.source === 'object' && args.source !== null) {
+      const rec = args.source as Record<string, unknown>;
+      const appErrorKey = rec.appErrorKey;
+      if (typeof appErrorKey === 'string') {
+        const resolved = resolveAppError({
+          key: appErrorKey as AppErrorKey,
+          locale,
+          params:
+            typeof rec.appErrorParams === 'object' && rec.appErrorParams
+              ? (rec.appErrorParams as Record<string, string | number | undefined>)
+              : undefined,
+        });
+        return {
+          s: 'error',
+          ec: resolved.ec,
+          em: resolved.em,
+          d: null,
+        };
+      }
+    }
+    return {
+      s: 'error',
+      ec: args.status,
+      em: this.extractMessage(args.source),
+      d: null,
+    };
+  }
+
+  private resolveLocale(request: Request): 'vi' | 'en' {
+    const header = request.headers['accept-language'];
+    const raw = Array.isArray(header) ? header[0] : header;
+    if (!raw) return 'vi';
+    return raw.toLowerCase().startsWith('en') ? 'en' : 'vi';
   }
 
   private extractMessage(source: unknown): string {

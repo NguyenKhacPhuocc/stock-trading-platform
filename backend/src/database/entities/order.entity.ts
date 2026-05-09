@@ -17,9 +17,20 @@ import { OrderSide, OrderType, OrderStatus } from '../../common/const';
 @Entity('orders')
 @Index(['stockId', 'status', 'createdAt'])
 @Index(['tradingAccountId', 'createdAt'])
+@Index(['orderCode'], { unique: true })
 export class Order {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  /** Mã lệnh hiển thị ngắn cho UI/demo, ví dụ: OD080526153045A1 */
+  @Column({
+    name: 'order_code',
+    type: 'varchar',
+    length: 24,
+    unique: true,
+    nullable: true,
+  })
+  orderCode: string | null;
 
   @Column({ name: 'trading_account_id', type: 'uuid' })
   tradingAccountId: string;

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Request } from 'express';
 import { User } from '../../../database/entities/user.entity';
+import { BusinessException } from '../../../common/errors/business.exception';
 
 export interface JwtPayload {
   sub: string;
@@ -35,7 +36,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub, isActive: true },
       select: ['id', 'custId', 'fullName', 'email', 'role'],
     });
-    if (!user) throw new UnauthorizedException('Token không hợp lệ');
+    if (!user) {
+      throw new BusinessException(
+        'AUTH_INVALID_TOKEN',
+        undefined,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
     return user;
   }
 }

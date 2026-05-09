@@ -1,7 +1,7 @@
 import type { ApiErrorEnvelope, ApiOkEnvelope } from '@stock/types';
 
 export type ParseApiEnvelopeOk<T> = { ok: true; d: T };
-export type ParseApiEnvelopeFail = { ok: false; em: string; ec: number };
+export type ParseApiEnvelopeFail = { ok: false; em: string; ec: number | string };
 
 /**
  * Parse JSON body envelope (Nest / Next gateway) sau `await res.json()`.
@@ -19,7 +19,8 @@ export function parseApiEnvelopeJson<T = unknown>(
   }
   if (r.s === 'error') {
     const em = typeof r.em === 'string' && r.em.trim() ? r.em : 'Lỗi';
-    const ec = typeof r.ec === 'number' ? r.ec : 500;
+    const ec =
+      typeof r.ec === 'number' || typeof r.ec === 'string' ? r.ec : 500;
     return { ok: false, em, ec };
   }
   return { ok: false, em: 'Phản hồi không hợp lệ', ec: 502 };

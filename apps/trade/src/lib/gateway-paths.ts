@@ -23,3 +23,13 @@ export const GATEWAY_AUTH = {
   refresh: `${AUTH_GW}/refresh`,
   session: `${AUTH_GW}/session`,
 } as const;
+
+// ─── Orders gateway paths ─────────────────────────────────────────────────────
+
+const ORDERS_GW = `${TRADE_BASE_PATH}/api/gateway/orders`;
+
+export const GATEWAY_ORDERS = {
+  list: ORDERS_GW,
+  place: ORDERS_GW,
+  cancel: (id: string) => `${ORDERS_GW}/${id}/cancel`,
+} as const;
