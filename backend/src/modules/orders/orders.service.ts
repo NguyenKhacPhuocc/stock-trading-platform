@@ -19,7 +19,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { MarketService } from '../market/market.service';
+import { MatchingQueueService } from '../matching/matching-queue.service';
 import { BusinessException } from '../../common/errors/business.exception';
 import type { AppErrorKey } from '../../common/errors/error-const';
 
@@ -34,7 +34,7 @@ export class OrdersService {
     private snapshotRepo: Repository<StockBoardSnapshot>,
     @InjectRepository(TradingAccount)
     private accountRepo: Repository<TradingAccount>,
-    private market: MarketService,
+    private readonly matchingQueue: MatchingQueueService,
     private dataSource: DataSource,
   ) {}
 
@@ -60,6 +60,11 @@ export class OrdersService {
     }
 
     const account = await this.getDefaultAccount(userId);
+    const existing = await this.orderRepo.findOne({
+      where: { tradingAccountId: account.id, clientOrderId: dto.clientOrderId },
+    });
+    if (existing) return existing;
+
     const stock = await this.stockRepo.findOne({ where: { id: dto.stockId } });
     if (!stock) {
       this.throwBusinessError('STOCK_NOT_FOUND');
@@ -89,6 +94,7 @@ export class OrdersService {
 
             const order = manager.create(Order, {
               orderCode,
+              clientOrderId: dto.clientOrderId,
               tradingAccountId: account.id,
               stockId: dto.stockId,
               side: dto.side,
@@ -130,6 +136,7 @@ export class OrdersService {
 
           const order = manager.create(Order, {
             orderCode,
+            clientOrderId: dto.clientOrderId,
             tradingAccountId: account.id,
             stockId: dto.stockId,
             side: dto.side,
@@ -139,14 +146,23 @@ export class OrdersService {
           });
           return manager.save(order);
         });
-        void this.market
-          .refreshBoardForStock(saved.stockId)
-          .catch((e: unknown) => {
-            this.logger.warn(`refreshBoardForStock: ${String(e)}`);
-          });
+        void this.matchingQueue
+          .enqueueAccepted(saved.id, saved.stockId)
+          .catch((e: unknown) =>
+            this.logger.error(`enqueueAccepted: ${String(e)}`),
+          );
         return saved;
       } catch (e: unknown) {
         if (this.isOrderCodeUniqueViolation(e) && attempt < 4) continue;
+        if (this.isClientOrderDuplicateViolation(e)) {
+          const dup = await this.orderRepo.findOne({
+            where: {
+              tradingAccountId: account.id,
+              clientOrderId: dto.clientOrderId,
+            },
+          });
+          if (dup) return dup;
+        }
         throw e;
       }
     }
@@ -174,7 +190,24 @@ export class OrdersService {
         },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!order || order.status !== OrderStatus.PENDING) {
+      if (!order) {
+        this.throwBusinessError('ORDER_NOT_CANCELLABLE');
+      }
+      // Không đồng thời `relations.stock` + `FOR UPDATE`: Postgres không cho lock kèm LEFT JOIN.
+      const stock = await manager.findOne(Stock, {
+        where: { id: order.stockId },
+      });
+      if (!stock) {
+        this.throwBusinessError('ORDER_NOT_CANCELLABLE');
+      }
+      if (
+        order.status !== OrderStatus.PENDING &&
+        order.status !== OrderStatus.PARTIAL
+      ) {
+        this.throwBusinessError('ORDER_NOT_CANCELLABLE');
+      }
+      const remainingQty = Number(order.quantity) - Number(order.matchedQty);
+      if (remainingQty <= 0) {
         this.throwBusinessError('ORDER_NOT_CANCELLABLE');
       }
 
@@ -186,7 +219,7 @@ export class OrdersService {
         if (!wallet) {
           this.throwBusinessError('WALLET_NOT_FOUND', undefined, 404);
         }
-        const lockedAmount = Number(order.price ?? 0) * Number(order.quantity);
+        const lockedAmount = Number(order.price ?? 0) * remainingQty;
         wallet.availableBalance =
           Number(wallet.availableBalance) + Number(lockedAmount);
         wallet.lockedBalance = Math.max(
@@ -213,7 +246,7 @@ export class OrdersService {
         if (position) {
           position.lockedQuantity = Math.max(
             0,
-            Number(position.lockedQuantity) - Number(order.quantity),
+            Number(position.lockedQuantity) - remainingQty,
           );
           await manager.save(position);
         }
@@ -221,11 +254,15 @@ export class OrdersService {
 
       order.status = OrderStatus.CANCELLED;
       order.cancelledAt = new Date();
-      return manager.save(order);
+      const out = await manager.save(order);
+      out.stock = stock;
+      return out;
     });
-    void this.market.refreshBoardForStock(saved.stockId).catch((e: unknown) => {
-      this.logger.warn(`refreshBoardForStock: ${String(e)}`);
-    });
+    void this.matchingQueue
+      .enqueueCancelled(saved.id, saved.stockId, saved.stock.symbol)
+      .catch((e: unknown) =>
+        this.logger.error(`enqueueCancelled: ${String(e)}`),
+      );
     return saved;
   }
 
@@ -276,6 +313,14 @@ export class OrdersService {
     const d = err.driverError as { code?: string; detail?: string } | undefined;
     return (
       d?.code === '23505' && String(d?.detail ?? '').includes('order_code')
+    );
+  }
+
+  private isClientOrderDuplicateViolation(err: unknown): boolean {
+    if (!(err instanceof QueryFailedError)) return false;
+    const d = err.driverError as { code?: string; detail?: string } | undefined;
+    return (
+      d?.code === '23505' && String(d?.detail ?? '').includes('client_order_id')
     );
   }
 }

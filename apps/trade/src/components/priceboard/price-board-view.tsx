@@ -3,13 +3,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { fetchMarketRows } from '@/store/slices/market.slice';
+import { useTradeRealtimeSocket } from '@/components/trade-realtime-provider';
+import {
+  WS_EXCHANGE_CODES,
+  diffSubscribeRooms,
+  sortDedupeStrings,
+} from '@/lib/ws-realtime.constants';
 import type { ExchangeCode } from './price-board-types';
 import { PriceBoardOverview } from './price-board-overview';
 import { PriceBoardTable, type PriceBoardTableHandle } from './price-board-table';
 import { PriceBoardToolbar } from './price-board-toolbar';
 
+type PriceBoardRealtimeRef =
+  | { kind: 'e'; ex: string[] }
+  | { kind: 'i'; sb: string[] };
+
 export default function PriceBoardView() {
+  const socket = useTradeRealtimeSocket();
   const dispatch = useAppDispatch();
+  /** Chỉ gọi lại subscribe sau reconnect thật — không làm cho `connect` lần đầu trùng với apply cuối effect. */
+  const priceBoardWsResyncAfterDisconnectRef = useRef(false);
+  const priceBoardRealtimeRef = useRef<PriceBoardRealtimeRef | null>(null);
   const tableRef = useRef<PriceBoardTableHandle | null>(null);
   const pendingScrollSymbolRef = useRef<string | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
@@ -51,6 +65,60 @@ export default function PriceBoardView() {
     pinnedSymbols,
     exchangeFilteredSet,
   ]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const exSorted = sortDedupeStrings(
+      exchange === 'ALL' ? [...WS_EXCHANGE_CODES] : [exchange as (typeof WS_EXCHANGE_CODES)[number]],
+    );
+
+    const applySubscriptions = () => {
+      const prev = priceBoardRealtimeRef.current;
+
+      if (!prev) {
+        socket.emit('subscribe:e', { EX: exSorted });
+        priceBoardRealtimeRef.current = { kind: 'e', ex: exSorted };
+        return;
+      }
+      if (prev.kind === 'i') {
+        if (prev.sb.length > 0) socket.emit('unsubscribe:i', { SB: prev.sb });
+        socket.emit('subscribe:e', { EX: exSorted });
+        priceBoardRealtimeRef.current = { kind: 'e', ex: exSorted };
+        return;
+      }
+      const { leave, join } = diffSubscribeRooms(prev.ex, exSorted);
+      if (leave.length > 0) socket.emit('unsubscribe:e', { EX: leave });
+      if (join.length > 0) socket.emit('subscribe:e', { EX: join });
+      priceBoardRealtimeRef.current = { kind: 'e', ex: exSorted };
+    };
+
+    const onDisconnect = () => {
+      priceBoardWsResyncAfterDisconnectRef.current = true;
+      priceBoardRealtimeRef.current = null;
+    };
+
+    const onConnect = () => {
+      if (!priceBoardWsResyncAfterDisconnectRef.current) return;
+      priceBoardWsResyncAfterDisconnectRef.current = false;
+      applySubscriptions();
+    };
+
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
+    applySubscriptions();
+
+    return () => {
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect', onConnect);
+      const prev = priceBoardRealtimeRef.current;
+      if (prev?.kind === 'e' && prev.ex.length > 0) socket.emit('unsubscribe:e', { EX: prev.ex });
+      else if (prev?.kind === 'i' && prev.sb.length > 0) {
+        socket.emit('unsubscribe:i', { SB: prev.sb });
+      }
+      priceBoardRealtimeRef.current = null;
+    };
+  }, [socket, exchange]);
 
   const unpinnedSymbolsForView = useMemo(
     () => exchangeFilteredSymbols.filter((sym) => !pinnedSet.has(sym)),

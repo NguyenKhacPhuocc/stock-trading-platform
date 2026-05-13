@@ -17,6 +17,7 @@ import { OrderSide, OrderType, OrderStatus } from '../../common/const';
 @Entity('orders')
 @Index(['stockId', 'status', 'createdAt'])
 @Index(['tradingAccountId', 'createdAt'])
+@Index(['tradingAccountId', 'clientOrderId'], { unique: true })
 @Index(['orderCode'], { unique: true })
 export class Order {
   @PrimaryGeneratedColumn('uuid')
@@ -31,6 +32,15 @@ export class Order {
     nullable: true,
   })
   orderCode: string | null;
+
+  /** Idempotency — FE/BFF gửi; unique với trading_account_id khi có giá trị. */
+  @Column({
+    name: 'client_order_id',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  clientOrderId: string | null;
 
   @Column({ name: 'trading_account_id', type: 'uuid' })
   tradingAccountId: string;

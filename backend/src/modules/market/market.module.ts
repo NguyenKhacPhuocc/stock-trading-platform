@@ -9,7 +9,6 @@ import { Trade } from '../../database/entities/trade.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { MarketSnapshotIngest } from '../../database/entities/market-snapshot-ingest.entity';
 import { MarketSnapshotIngestService } from './market-snapshot-ingest.service';
-
 @Module({
   imports: [
     TypeOrmModule.forFeature([

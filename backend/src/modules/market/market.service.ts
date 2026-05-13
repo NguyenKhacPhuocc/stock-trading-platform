@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThanOrEqual, In } from 'typeorm';
 import { randomBytes } from 'crypto';
@@ -70,6 +70,8 @@ export interface CachedSymbolRow {
 
 @Injectable()
 export class MarketService {
+  private readonly logger = new Logger(MarketService.name);
+
   constructor(
     @InjectRepository(PriceHistory) private priceRepo: Repository<PriceHistory>,
     @InjectRepository(Stock) private stockRepo: Repository<Stock>,
@@ -103,6 +105,7 @@ export class MarketService {
       : cachedRows;
 
     return filteredRows.map((row) => ({
+      stockId: row.stockId,
       symbol: row.symbol,
       exchange: row.exchange,
       fullName: row.fullName,

@@ -65,6 +65,49 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.publish(channel, message);
   }
 
+  async hSet(key: string, fieldValues: Record<string, string | number>): Promise<void> {
+    await this.client.hSet(key, fieldValues);
+  }
+
+  async hGetAll(key: string): Promise<Record<string, string>> {
+    return this.client.hGetAll(key);
+  }
+
+  async hDel(key: string, fields: string[]): Promise<void> {
+    if (fields.length > 0) {
+      await this.client.hDel(key, fields);
+    }
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
+  }
+
+  // ─── Redis Streams (WAL) ──────────────────────────────────────────────────
+
+  /** Append một event vào stream, trả về stream ID (e.g. "1234567890-0"). */
+  async xAdd(key: string, fields: Record<string, string>): Promise<string> {
+    return this.client.xAdd(key, '*', fields);
+  }
+
+  /** Đọc events trong khoảng [start, end] (inclusive). Dùng '-' và '+' cho full range. */
+  async xRange(
+    key: string,
+    start: string,
+    end: string,
+  ): Promise<Array<{ id: string; message: Record<string, string> }>> {
+    return this.client.xRange(key, start, end);
+  }
+
+  async xLen(key: string): Promise<number> {
+    return this.client.xLen(key);
+  }
+
+  /** Giữ lại maxLen event gần nhất, xóa phần cũ hơn. */
+  async xTrim(key: string, maxLen: number): Promise<void> {
+    await this.client.xTrim(key, 'MAXLEN', maxLen);
+  }
+
   // Trả về subscriber client riêng (subscribe cần connection riêng)
   createSubscriberClient(): RedisClientType {
     const database = this.config.get<number>('REDIS_DATABASE', 0);

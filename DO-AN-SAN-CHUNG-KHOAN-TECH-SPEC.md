@@ -277,13 +277,17 @@ audit_logs — ghi nhận thay đổi quan trọng (actor_user_id, action, entit
 ### 7.2 WebSocket (Socket.IO)
 
 
-| Event               | Hướng           | Mô tả                            |
-| ------------------- | --------------- | -------------------------------- |
-| subscribe:price     | Client → Server | Subscribe bảng giá               |
-| subscribe:orderbook | Client → Server | Subscribe order book theo symbol |
-| price:update        | Server → Client | Cập nhật giá                     |
-| orderbook:update    | Server → Client | Cập nhật order book              |
-| order:matched       | Server → Client | Lệnh đã khớp                     |
+| Event               | Hướng           | Mô tả |
+| ------------------- | --------------- | ----- |
+| subscribe:i + `SB`  | Client → Server | Join `room:i:<SB>`; `SB` một chuỗi hoặc mảng mã — một message có thể gộp nhiều symbol |
+| unsubscribe:i + `SB`| Client → Server | Leave — cùng quy ước một/mảng `SB` |
+| subscribe:e + `EX`  | Client → Server | Join `room:e:<EX>`; `EX` một sàn hoặc mảng (ví dụ tab ALL: `['HOSE','HNX','UPCOM']`) |
+| unsubscribe:e + `EX`| Client → Server | Leave — cùng quy ước một/mảng `EX` |
+| subscribe:idx       | Client → Server | Join `room:idx` |
+| unsubscribe:idx   | Client → Server | Leave `room:idx` |
+| i                   | Server → Client | Patch `OB` / `TT` — snapshot chỉ REST; client mở WS sau HTTP snapshot (`lastSyncedAt`) |
+| idx / e *(event)*   | *(dự phòng)*    | Theo room `idx`, `room:e`; payload có thể tách khỏi `i` sau này |
+| order:matched       | Server → Client | Khớp lệnh theo user (khi join room user) |
 
 
 ---

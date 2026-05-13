@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
@@ -9,7 +9,7 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
-import { MarketModule } from '../market/market.module';
+import { MatchingModule } from '../matching/matching.module';
 
 @Module({
   imports: [
@@ -22,7 +22,7 @@ import { MarketModule } from '../market/market.module';
       Position,
       CashTransaction,
     ]),
-    MarketModule,
+    forwardRef(() => MatchingModule),
   ],
   providers: [OrdersService],
   controllers: [OrdersController],

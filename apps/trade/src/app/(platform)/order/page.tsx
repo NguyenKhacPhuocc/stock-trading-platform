@@ -12,6 +12,9 @@ import type { BottomTab, OrderEntryTab, OrderSide, OrderType } from '@/component
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { GATEWAY_ORDERS } from '@/lib/gateway-paths';
 import { clearUser } from '@/store/slices/auth.slice';
+import { useOrderBookRealtime } from '@/hooks/use-order-book-realtime';
+
+const ORDER_SYMBOL_STORAGE_KEY = 'trade.order.symbol';
 
 type OrderRow = {
   id: string;
@@ -71,6 +74,8 @@ export default function OrderPage() {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  /** Chưa gán mã từ session / mặc định — tránh WS `subscribe:i` mã đầu danh sách rồi mới đổi. */
+  const [orderSymbolBootstrapped, setOrderSymbolBootstrapped] = useState(false);
   const redirectedUnauthRef = useRef(false);
 
   const handleSessionExpired = useCallback(() => {
@@ -129,8 +134,37 @@ export default function OrderPage() {
     };
   }, [handleSessionExpired, isAuthenticated, isHydratingSession]);
 
-  // Auto-select first symbol when available (derived value, no cascading updates)
-  const effectiveSymbol = symbol || (searchUniverse.length > 0 ? searchUniverse[0].symbol : '');
+  useEffect(() => {
+    if (searchUniverse.length === 0 || orderSymbolBootstrapped) return;
+    try {
+      const saved = sessionStorage
+        .getItem(ORDER_SYMBOL_STORAGE_KEY)
+        ?.trim()
+        .toUpperCase();
+      if (saved && searchUniverse.some((s) => s.symbol === saved)) {
+        setSymbol(saved);
+      } else {
+        setSymbol(searchUniverse[0].symbol);
+      }
+    } catch {
+      setSymbol(searchUniverse[0].symbol);
+    }
+    setOrderSymbolBootstrapped(true);
+  }, [searchUniverse, orderSymbolBootstrapped]);
+
+  useEffect(() => {
+    if (!symbol) return;
+    try {
+      sessionStorage.setItem(ORDER_SYMBOL_STORAGE_KEY, symbol);
+    } catch {
+      /* noop */
+    }
+  }, [symbol]);
+
+  const effectiveSymbol = orderSymbolBootstrapped
+    ? symbol || (searchUniverse.length > 0 ? searchUniverse[0].symbol : '')
+    : '';
+  const liveOrderBook = useOrderBookRealtime(effectiveSymbol);
   const isLo = orderType === 'LO';
   const baseValid = Boolean(effectiveSymbol) && Number(quantity) > 0 && (!isLo || Number(price) > 0);
   const canSubmit =
@@ -173,11 +207,18 @@ export default function OrderPage() {
     }
     setIsSubmittingOrder(true);
     try {
-      const pickedRow = marketEntities[effectiveSymbol];
-      if (!pickedRow?.id) throw new Error('Không tìm thấy mã chứng khoán');
+      const symKey = effectiveSymbol.trim().toUpperCase();
+      const fromQuotes = searchUniverse.find((u) => u.symbol === symKey);
+      const stockId = fromQuotes?.stockId ?? marketEntities[symKey]?.id;
+      if (!stockId) throw new Error('Không tìm thấy mã chứng khoán');
 
+      const clientOrderId =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const payload = {
-        stockId: pickedRow.id,
+        clientOrderId,
+        stockId,
         side: orderSide,
         orderType,
         quantity: Number(quantity),
@@ -258,7 +299,13 @@ export default function OrderPage() {
     <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden bg-[#0b0d11] p-1">
       <div className="grid min-h-0 flex-[2] grid-cols-1 gap-1 xl:grid-cols-[2.35fr_0.85fr_1fr]">
         <OrderChartPanel panelCardClassName={panelCard} symbolLabel={effectiveSymbol} />
-        <OrderBookPanel panelCardClassName={panelCard} />
+        <OrderBookPanel
+          panelCardClassName={panelCard}
+          asks={liveOrderBook?.asks}
+          bids={liveOrderBook?.bids}
+          lastPrice={liveOrderBook?.lastPrice ?? undefined}
+          lastDirection={liveOrderBook?.lastDirection}
+        />
         <OrderEntryPanel
           panelCardClassName={panelCard}
           orderEntryTab={orderEntryTab}

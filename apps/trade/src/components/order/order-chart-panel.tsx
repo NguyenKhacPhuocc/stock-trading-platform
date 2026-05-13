@@ -1,11 +1,17 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { useTradeRealtimeSocket } from '@/components/trade-realtime-provider';
 import { PriceBoardTable } from '@/components/priceboard/price-board-table';
 import { PriceBoardToolbar } from '@/components/priceboard/price-board-toolbar';
 import type { ExchangeCode } from '@/components/priceboard/price-board-types';
 import { fetchMarketRows } from '@/store/slices/market.slice';
+import {
+  WS_EXCHANGE_CODES,
+  diffSubscribeRooms,
+  sortDedupeStrings,
+} from '@/lib/ws-realtime.constants';
 
 type OrderChartPanelProps = {
   panelCardClassName: string;
@@ -14,6 +20,9 @@ type OrderChartPanelProps = {
 
 export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartPanelProps) {
   const [tab, setTab] = useState<'chart' | 'board'>('chart');
+  const boardExchangeRoomsRef = useRef<string[] | null>(null);
+  const chartBoardWsResyncAfterDisconnectRef = useRef(false);
+  const socket = useTradeRealtimeSocket();
   const dispatch = useAppDispatch();
   const exchangeBySymbol = useAppSelector((s) => s.market.exchangeBySymbol);
   const orderSymbols = useAppSelector((s) => s.market.orderSymbols);
@@ -27,6 +36,52 @@ export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartP
     if (tab !== 'board') return;
     void dispatch(fetchMarketRows({ exchange }));
   }, [dispatch, exchange, tab]);
+
+  useEffect(() => {
+    if (!socket || tab !== 'board') return;
+
+    const exSorted = sortDedupeStrings(
+      exchange === 'ALL' ? [...WS_EXCHANGE_CODES] : [exchange as (typeof WS_EXCHANGE_CODES)[number]],
+    );
+
+    const applyBoardExchangeRooms = () => {
+      const prev = boardExchangeRoomsRef.current;
+      if (prev === null) {
+        socket.emit('subscribe:e', { EX: exSorted });
+        boardExchangeRoomsRef.current = exSorted;
+      } else {
+        const { leave, join } = diffSubscribeRooms(prev, exSorted);
+        if (leave.length > 0) socket.emit('unsubscribe:e', { EX: leave });
+        if (join.length > 0) socket.emit('subscribe:e', { EX: join });
+        boardExchangeRoomsRef.current = exSorted;
+      }
+    };
+
+    const onDisconnect = () => {
+      chartBoardWsResyncAfterDisconnectRef.current = true;
+      boardExchangeRoomsRef.current = null;
+    };
+
+    const onConnect = () => {
+      if (!chartBoardWsResyncAfterDisconnectRef.current) return;
+      chartBoardWsResyncAfterDisconnectRef.current = false;
+      boardExchangeRoomsRef.current = null;
+      socket.emit('subscribe:e', { EX: exSorted });
+      boardExchangeRoomsRef.current = exSorted;
+    };
+
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
+    applyBoardExchangeRooms();
+
+    return () => {
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect', onConnect);
+      const last = boardExchangeRoomsRef.current;
+      if (last !== null && last.length > 0) socket.emit('unsubscribe:e', { EX: last });
+      boardExchangeRoomsRef.current = null;
+    };
+  }, [socket, tab, exchange]);
 
   const exchangeFilteredSymbols = useMemo(() => {
     if (exchange === 'ALL') return orderSymbols;

@@ -4,7 +4,7 @@ import { parseApiEnvelopeJson } from '@stock/utils';
 import type { ExchangeCode, PriceBoardRow } from '@/components/priceboard/price-board-types';
 import { gatewayMarketBoardPath } from '@/lib/gateway-paths';
 
-type MarketInstrumentApi = {
+export type MarketInstrumentApi = {
   stockId: string;
   symbol: string;
   exchange: string;
@@ -33,6 +33,7 @@ type MarketInstrumentApi = {
 };
 
 export type PriceBoardSearchItem = {
+  stockId: string;
   symbol: string;
   exchange: ExchangeCode;
   fullName?: string;
@@ -72,7 +73,8 @@ function toNumber(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function mapInstrumentToRow(item: MarketInstrumentApi): PriceBoardRow {
+/** Map payload REST/WS (instrument) → một dòng bảng giá — dùng chung fetch và realtime. */
+export function mapInstrumentApiToRow(item: MarketInstrumentApi): PriceBoardRow {
   return {
     id: item.stockId || item.symbol,
     symbol: item.symbol,
@@ -101,11 +103,12 @@ function mapInstrumentToRow(item: MarketInstrumentApi): PriceBoardRow {
 function mapQuotesToSearchUniverse(payload: unknown[]): PriceBoardSearchItem[] {
   const normalized = (payload as Array<Record<string, unknown>>)
     .map((item) => ({
+      stockId: String(item.stockId ?? '').trim(),
       symbol: String(item.symbol ?? '').toUpperCase(),
       exchange: String(item.exchange ?? '').toUpperCase() as ExchangeCode,
       fullName: typeof item.fullName === 'string' ? item.fullName : undefined,
     }))
-    .filter((item) => item.symbol && item.exchange)
+    .filter((item) => item.stockId && item.symbol && item.exchange)
     .sort((a, b) => a.symbol.localeCompare(b.symbol));
   return normalized;
 }
@@ -134,7 +137,7 @@ export const fetchMarketRows = createAsyncThunk<
     const orderSymbols: string[] = [];
     const exchangeBySymbol: Record<string, ExchangeCode> = {};
     (instruments as MarketInstrumentApi[]).forEach((item) => {
-      const row = mapInstrumentToRow(item);
+      const row = mapInstrumentApiToRow(item);
       entities[row.symbol] = row;
       orderSymbols.push(row.symbol);
       exchangeBySymbol[row.symbol] = row.exchange;
@@ -165,7 +168,25 @@ const marketSlice = createSlice({
     ) => {
       for (const { symbol, patch } of action.payload) {
         const current = state.entities[symbol];
-        if (!current) continue;
+        if (!current) {
+          const row = patch as Partial<PriceBoardRow>;
+          if (
+            row.symbol === symbol &&
+            typeof row.id === 'string' &&
+            row.match &&
+            row.bid1 &&
+            row.ask1 &&
+            row.exchange
+          ) {
+            state.entities[symbol] = row as PriceBoardRow;
+            if (!state.orderSymbols.includes(symbol)) {
+              state.orderSymbols.push(symbol);
+              state.orderSymbols.sort((a, b) => a.localeCompare(b));
+            }
+            state.exchangeBySymbol[symbol] = row.exchange;
+          }
+          continue;
+        }
 
         const next: PriceBoardRow = {
           ...current,

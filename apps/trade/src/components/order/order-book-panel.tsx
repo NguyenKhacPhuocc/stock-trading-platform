@@ -7,9 +7,7 @@ export type OrderBookLevel = {
   amount: number;
 };
 
-/** Tab Tổng hợp: mỗi side 10 mốc; tab chỉ Mua / chỉ Bán: 20 mốc một phía. */
 const VISIBLE_LEVELS_COMBINED = 10;
-const VISIBLE_LEVELS_SINGLE_SIDE = 20;
 
 /** Cột Giá tách ô; KL+Tổng gộp — depth chỉ trong ô gộp, neo mép phải của ô đó. */
 const BOOK_ROW_OUTER_CLASS =
@@ -17,55 +15,6 @@ const BOOK_ROW_OUTER_CLASS =
 /** Lưới con KL/Tổng — cùng cấu trúc với từng hàng để cột không lệch. */
 const BOOK_QTY_TOTAL_INNER_CLASS =
   'grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 tabular-nums';
-
-/** Snapshot cứng cho UI — chỉ dùng khi chưa truyền asks/bids từ props. */
-const MOCK_LAST_PRICE = 41.45;
-
-const FALLBACK_BOOK_ASKS: OrderBookLevel[] = [
-  { price: 41.52, amount: 120 },
-  { price: 41.54, amount: 85 },
-  { price: 41.56, amount: 200 },
-  { price: 41.58, amount: 64 },
-  { price: 41.61, amount: 150 },
-  { price: 41.63, amount: 90 },
-  { price: 41.66, amount: 110 },
-  { price: 41.69, amount: 75 },
-  { price: 41.72, amount: 88 },
-  { price: 41.75, amount: 102 },
-  { price: 41.78, amount: 78 },
-  { price: 41.81, amount: 130 },
-  { price: 41.84, amount: 66 },
-  { price: 41.87, amount: 94 },
-  { price: 41.9, amount: 112 },
-  { price: 41.93, amount: 58 },
-  { price: 41.96, amount: 140 },
-  { price: 41.99, amount: 82 },
-  { price: 42.02, amount: 71 },
-  { price: 42.05, amount: 99 },
-];
-
-const FALLBACK_BOOK_BIDS: OrderBookLevel[] = [
-  { price: 41.44, amount: 95 },
-  { price: 41.41, amount: 180 },
-  { price: 41.38, amount: 55 },
-  { price: 41.36, amount: 140 },
-  { price: 41.33, amount: 70 },
-  { price: 41.3, amount: 200 },
-  { price: 41.27, amount: 45 },
-  { price: 41.24, amount: 120 },
-  { price: 41.21, amount: 160 },
-  { price: 41.18, amount: 92 },
-  { price: 41.15, amount: 105 },
-  { price: 41.12, amount: 68 },
-  { price: 41.09, amount: 188 },
-  { price: 41.06, amount: 52 },
-  { price: 41.03, amount: 122 },
-  { price: 41.0, amount: 76 },
-  { price: 40.97, amount: 134 },
-  { price: 40.94, amount: 98 },
-  { price: 40.91, amount: 61 },
-  { price: 40.88, amount: 145 },
-];
 
 /** Lấy các mức sát spread nhất trước khi render depth. */
 function nearestVisibleLevels(side: 'sell' | 'buy', levels: OrderBookLevel[], maxRows: number) {
@@ -323,28 +272,23 @@ export function OrderBookPanel({
 }: OrderBookPanelProps) {
   const [view, setView] = useState<BookView>('both');
 
-  /** Chỉ lấy dữ liệu cứng khi hai phía chưa truyền — tránh lẫn API một bên có / một bên không. */
-  const useFallbackDemo = asks.length === 0 && bids.length === 0;
-  const sourceAsks = useFallbackDemo ? FALLBACK_BOOK_ASKS : asks;
-  const sourceBids = useFallbackDemo ? FALLBACK_BOOK_BIDS : bids;
-
-  const levelsCap = view === 'both' ? VISIBLE_LEVELS_COMBINED : VISIBLE_LEVELS_SINGLE_SIDE;
+  const levelsCap = VISIBLE_LEVELS_COMBINED;
 
   const visibleAsks = useMemo(
-    () => nearestVisibleLevels('sell', sourceAsks, levelsCap),
-    [sourceAsks, levelsCap],
+    () => nearestVisibleLevels('sell', asks, levelsCap),
+    [asks, levelsCap],
   );
   const visibleBids = useMemo(
-    () => nearestVisibleLevels('buy', sourceBids, levelsCap),
-    [sourceBids, levelsCap],
+    () => nearestVisibleLevels('buy', bids, levelsCap),
+    [bids, levelsCap],
   );
 
   const askRows = useMemo(() => withDepthLevels(visibleAsks, 'sell'), [visibleAsks]);
 
   const bidRows = useMemo(() => withDepthLevels(visibleBids, 'buy'), [visibleBids]);
 
-  const displayLastPrice = lastPrice ?? (useFallbackDemo ? MOCK_LAST_PRICE : undefined);
-  const displayDirection: 'up' | 'down' | 'flat' = useFallbackDemo ? 'down' : lastDirection;
+  const displayLastPrice = lastPrice ?? undefined;
+  const displayDirection: 'up' | 'down' | 'flat' = lastDirection;
 
   const showAsks = view === 'both' || view === 'sell';
   const showBids = view === 'both' || view === 'buy';
@@ -372,31 +316,27 @@ export function OrderBookPanel({
       <ColumnHeaders />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden leading-none">
-        {/* Bên bán — chia đều với bên mua; không dùng flex % cao ô giữa để khỏi “trống giả” */}
-        <div className={`${askFlexClass} flex flex-col overflow-hidden`}>
-          {!showAsks || askRows.length === 0 ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center py-6 text-[10px] text-muted px-2 text-center leading-snug">
-              {!showAsks ? '' : 'Không có dữ liệu bên bán'}
-            </div>
-          ) : (
-            <div
-              className="min-h-0 flex-1 grid gap-y-[1px] overflow-hidden py-[2px]"
-              style={{
-                gridTemplateRows: `repeat(${askRows.length}, minmax(0, 1fr))`,
-              }}
-            >
-              {askRows.map((r, i) => (
-                <DepthRow
-                  key={`ask-${r.price}-${i}`}
-                  className="h-full min-h-0"
-                  side="sell"
-                  qty={r.amount}
-                  price={r.price}
-                  depthPct={r.depthPct}
-                />
-              ))}
-            </div>
-          )}
+        {/* Bên bán — căn lề dưới (justify-end) để sát với giá khớp */}
+        <div className={`${askFlexClass} flex flex-col justify-end overflow-hidden`}>
+          <div
+            className="grid h-full min-h-0 gap-y-[1px] py-[2px]"
+            style={{
+              gridTemplateRows: `repeat(${VISIBLE_LEVELS_COMBINED}, minmax(0, 1fr))`,
+            }}
+          >
+            {askRows.map((r, i) => (
+              <DepthRow
+                key={`ask-${r.price}-${i}`}
+                side="sell"
+                qty={r.amount}
+                price={r.price}
+                depthPct={r.depthPct}
+              />
+            ))}
+            {Array.from({ length: Math.max(0, VISIBLE_LEVELS_COMBINED - askRows.length) }).map((_, i) => (
+              <div key={`ask-empty-${i}`} />
+            ))}
+          </div>
         </div>
 
         {/* Giá khớp — cao cố định gọn */}
@@ -404,31 +344,27 @@ export function OrderBookPanel({
           <LastTradeRow price={displayLastPrice} direction={displayDirection} />
         </div>
 
-        {/* Bên mua — 45% */}
-        <div className={`${bidFlexClass} flex flex-col overflow-hidden`}>
-          {!showBids || bidRows.length === 0 ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center py-6 text-[10px] text-muted px-2 text-center leading-snug">
-              {!showBids ? '' : 'Không có dữ liệu bên mua'}
-            </div>
-          ) : (
-            <div
-              className="min-h-0 flex-1 grid gap-y-[1px] overflow-hidden py-[2px]"
-              style={{
-                gridTemplateRows: `repeat(${bidRows.length}, minmax(0, 1fr))`,
-              }}
-            >
-              {bidRows.map((r, i) => (
-                <DepthRow
-                  key={`bid-${r.price}-${i}`}
-                  className="h-full min-h-0"
-                  side="buy"
-                  qty={r.amount}
-                  price={r.price}
-                  depthPct={r.depthPct}
-                />
-              ))}
-            </div>
-          )}
+        {/* Bên mua — căn lề trên (justify-start) để sát với giá khớp */}
+        <div className={`${bidFlexClass} flex flex-col justify-start overflow-hidden`}>
+          <div
+            className="grid h-full min-h-0 gap-y-[1px] py-[2px]"
+            style={{
+              gridTemplateRows: `repeat(${VISIBLE_LEVELS_COMBINED}, minmax(0, 1fr))`,
+            }}
+          >
+            {bidRows.map((r, i) => (
+              <DepthRow
+                key={`bid-${r.price}-${i}`}
+                side="buy"
+                qty={r.amount}
+                price={r.price}
+                depthPct={r.depthPct}
+              />
+            ))}
+            {Array.from({ length: Math.max(0, VISIBLE_LEVELS_COMBINED - bidRows.length) }).map((_, i) => (
+              <div key={`bid-empty-${i}`} />
+            ))}
+          </div>
         </div>
 
         {/* Thanh tỉ lệ — 1 dòng full width */}
