@@ -19,7 +19,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { MatchingQueueService } from '../matching/matching-queue.service';
+import { MatchingService } from '../matching/matching.service';
 import { BusinessException } from '../../common/errors/business.exception';
 import type { AppErrorKey } from '../../common/errors/error-const';
 
@@ -34,7 +34,7 @@ export class OrdersService {
     private snapshotRepo: Repository<StockBoardSnapshot>,
     @InjectRepository(TradingAccount)
     private accountRepo: Repository<TradingAccount>,
-    private readonly matchingQueue: MatchingQueueService,
+    private readonly matching: MatchingService,
     private dataSource: DataSource,
   ) {}
 
@@ -122,13 +122,12 @@ export class OrdersService {
             where: { tradingAccountId: account.id, stockId: dto.stockId },
             lock: { mode: 'pessimistic_write' },
           });
-          const sellableQty = position
-            ? Number(position.quantity) - Number(position.lockedQuantity)
-            : 0;
-          if (sellableQty < Number(dto.quantity)) {
+          const availableQty = position ? Number(position.quantity) : 0;
+          if (availableQty < Number(dto.quantity)) {
             this.throwBusinessError('INSUFFICIENT_SELLABLE_QTY');
           }
           if (position) {
+            position.quantity = availableQty - Number(dto.quantity);
             position.lockedQuantity =
               Number(position.lockedQuantity) + Number(dto.quantity);
             await manager.save(position);
@@ -146,7 +145,7 @@ export class OrdersService {
           });
           return manager.save(order);
         });
-        void this.matchingQueue
+        void this.matching
           .enqueueAccepted(saved.id, saved.stockId)
           .catch((e: unknown) =>
             this.logger.error(`enqueueAccepted: ${String(e)}`),
@@ -244,6 +243,7 @@ export class OrdersService {
           lock: { mode: 'pessimistic_write' },
         });
         if (position) {
+          position.quantity = Number(position.quantity) + remainingQty;
           position.lockedQuantity = Math.max(
             0,
             Number(position.lockedQuantity) - remainingQty,
@@ -258,7 +258,7 @@ export class OrdersService {
       out.stock = stock;
       return out;
     });
-    void this.matchingQueue
+    void this.matching
       .enqueueCancelled(saved.id, saved.stockId, saved.stock.symbol)
       .catch((e: unknown) =>
         this.logger.error(`enqueueCancelled: ${String(e)}`),

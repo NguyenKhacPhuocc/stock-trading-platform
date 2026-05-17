@@ -8,7 +8,7 @@ import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { MarketSnapshotIngest } from '../../database/entities/market-snapshot-ingest.entity';
-import { MarketSnapshotIngestService } from './market-snapshot-ingest.service';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -20,8 +20,8 @@ import { MarketSnapshotIngestService } from './market-snapshot-ingest.service';
       MarketSnapshotIngest,
     ]),
   ],
-  providers: [MarketService, MarketSnapshotIngestService],
+  providers: [MarketService],
   controllers: [MarketController],
-  exports: [MarketService, MarketSnapshotIngestService],
+  exports: [MarketService],
 })
 export class MarketModule {}

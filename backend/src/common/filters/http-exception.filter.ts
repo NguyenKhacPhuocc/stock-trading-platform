@@ -68,7 +68,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           locale,
           params:
             typeof rec.appErrorParams === 'object' && rec.appErrorParams
-              ? (rec.appErrorParams as Record<string, string | number | undefined>)
+              ? (rec.appErrorParams as Record<
+                  string,
+                  string | number | undefined
+                >)
               : undefined,
         });
         return {

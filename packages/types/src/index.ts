@@ -72,7 +72,11 @@ export interface Position {
   id: string;
   tradingAccountId: string;
   stockId: string;
+  /** Khối lượng khả dụng (chưa phong tỏa lệnh bán) */
   quantity: number;
+  lockedQuantity: number;
+  /** Tổng nắm giữ = quantity + lockedQuantity */
+  totalQuantity: number;
   avgPrice: number;
   stock: Pick<Stock, 'symbol' | 'name' | 'exchange'>;
 }

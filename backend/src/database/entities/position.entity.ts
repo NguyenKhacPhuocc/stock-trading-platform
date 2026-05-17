@@ -23,11 +23,11 @@ export class Position {
   @Column({ name: 'stock_id', type: 'uuid' })
   stockId: string;
 
-  /** Số lượng đang nắm giữ (đã khớp, chưa trừ T+2) */
+  /** Khối lượng khả dụng (chưa phong tỏa lệnh bán) — tương tự available_balance */
   @Column({ default: 0 })
   quantity: number;
 
-  /** Số lượng đang bị phong tỏa (đặt lệnh bán chưa khớp) */
+  /** Khối lượng phong tỏa khi đặt lệnh bán chờ khớp — tương tự locked_balance */
   @Column({ name: 'locked_quantity', default: 0 })
   lockedQuantity: number;
 

@@ -1,5 +1,12 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Repository, MoreThanOrEqual, In } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { PriceHistory } from '../../database/entities/price-history.entity';
@@ -7,6 +14,7 @@ import { Stock } from '../../database/entities/stock.entity';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
+import { MarketSnapshotIngest } from '../../database/entities/market-snapshot-ingest.entity';
 import {
   Exchange,
   OrderSide,
@@ -15,14 +23,38 @@ import {
   CacheTtl,
   marketSymbolsCacheKey,
   DEFAULT_STOCK_BOARD_ID,
+  MarketSnapshotIngestStatus,
+  MarketSnapshotSource,
 } from '../../common/const';
 import { RedisService } from '../../redis/redis.service';
-import { roundToTick, toNum } from './market-price.util';
-import type { MarketInstrumentDto } from './dto/market-instrument.dto';
+import { roundToTick, toNum } from './util/market-price.util';
+import type {
+  MarketInstrumentDto,
+  MarketSnapshotIngestResultDto,
+} from './dto/market-instrument.dto';
 
 interface DepthLevel {
   price: number;
   vol: number;
+}
+
+type SsiExchangePath = 'hose' | 'hnx' | 'upcom';
+
+interface SsiSymbol {
+  boardId?: string;
+  companyNameVi?: string;
+  exchange?: string;
+  stockSymbol?: string;
+  refPrice?: number | string;
+  ceiling?: number | string;
+  floor?: number | string;
+  tradingDate?: string;
+  tradingUnit?: number | string;
+}
+
+interface SsiResponseLike {
+  data?: unknown;
+  items?: unknown;
 }
 
 /** Một dòng cache Redis — snapshot `stock_board_snapshots` + các cột `stocks` cần cho UI/API */
@@ -63,13 +95,12 @@ export interface CachedSymbolRow {
   offerVol3: number;
   totalBidQty: number;
   totalOfferQty: number;
-  sessionCode: string | null;
   priceChange: number;
   priceChangePct: number;
 }
 
 @Injectable()
-export class MarketService {
+export class MarketService implements OnApplicationBootstrap {
   private readonly logger = new Logger(MarketService.name);
 
   constructor(
@@ -79,8 +110,20 @@ export class MarketService {
     @InjectRepository(Trade) private tradeRepo: Repository<Trade>,
     @InjectRepository(StockBoardSnapshot)
     private snapshotRepo: Repository<StockBoardSnapshot>,
+    @InjectRepository(MarketSnapshotIngest)
+    private ingestRepo: Repository<MarketSnapshotIngest>,
     private redis: RedisService,
+    private config: ConfigService,
   ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    // SSI ingest: admin gọi forceRefreshMarketSnapshot()
+  }
+
+  /** Admin sync snapshot từ SSI → stocks + stock_board_snapshots */
+  forceRefreshMarketSnapshot(): Promise<MarketSnapshotIngestResultDto> {
+    return this.runSsiIngest();
+  }
 
   /**
    * GET /market/quotes — master data: symbol, trần/sàn/TC theo ngày, thông tin mã.
@@ -411,7 +454,6 @@ export class MarketService {
         offerVol3: snap?.offerVol3 ?? 0,
         totalBidQty: snap?.totalBidQty ?? 0,
         totalOfferQty: snap?.totalOfferQty ?? 0,
-        sessionCode: snap?.sessionCode ?? null,
         priceChange: toNum(snap?.priceChange ?? 0),
         priceChangePct: toNum(snap?.priceChangePct ?? 0),
       };
@@ -484,7 +526,7 @@ export class MarketService {
       foreignRoom: 0,
       TOTAL_OFFER_QTTY: row.totalOfferQty,
       TOTAL_BID_QTTY: row.totalBidQty,
-      tradingSessionId: row.sessionCode ?? 'MOCK_CONTINUOUS',
+      tradingSessionId: 'MOCK_CONTINUOUS',
       ts,
       kid: `${ts}-${randomBytes(8).toString('hex')}`,
     };
@@ -629,5 +671,364 @@ export class MarketService {
       this.redis.del(marketSymbolsCacheKey(tradingDate, 'ALL')),
       this.redis.del(marketSymbolsCacheKey(tradingDate, exchange)),
     ]);
+  }
+
+  // ─── SSI snapshot ingest (admin) ─────────────────────────────────────────
+
+  private async runSsiIngest(): Promise<MarketSnapshotIngestResultDto> {
+    const fallbackTradingDate = this.tradingDateYmdVN();
+    let ingestId: string | null = null;
+    let mappedTradingDate = fallbackTradingDate;
+    try {
+      const rows = await this.fetchSsiAllExchanges();
+      if (rows.length === 0) {
+        throw new Error('SSI trả về danh sách rỗng cho tất cả sàn.');
+      }
+
+      mappedTradingDate = this.resolveSsiTradingDate(rows, fallbackTradingDate);
+
+      const ingest = await this.ingestRepo.save(
+        this.ingestRepo.create({
+          tradingDate: mappedTradingDate,
+          source: MarketSnapshotSource.SSI,
+          status: MarketSnapshotIngestStatus.PENDING,
+          startedAt: new Date(),
+          finishedAt: null,
+          errorMessage: null,
+          symbolsUpserted: null,
+        }),
+      );
+      ingestId = ingest.id;
+
+      const symbolsUpserted = await this.upsertSsiDailySeed(
+        rows,
+        mappedTradingDate,
+      );
+      await this.refreshSymbolsCacheAfterIngest(mappedTradingDate);
+
+      await this.ingestRepo.update(ingest.id, {
+        status: MarketSnapshotIngestStatus.SUCCESS,
+        finishedAt: new Date(),
+        symbolsUpserted,
+        errorMessage: null,
+      });
+      const message = `SSI ingest SUCCESS ${mappedTradingDate}: ${symbolsUpserted} mã.`;
+      this.logger.log(message);
+      return { tradingDate: mappedTradingDate, symbolsUpserted, message };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (ingestId) {
+        await this.ingestRepo.update(ingestId, {
+          status: MarketSnapshotIngestStatus.FAILED,
+          finishedAt: new Date(),
+          errorMessage: message,
+        });
+      } else {
+        await this.ingestRepo.save(
+          this.ingestRepo.create({
+            tradingDate: mappedTradingDate,
+            source: MarketSnapshotSource.SSI,
+            status: MarketSnapshotIngestStatus.FAILED,
+            startedAt: new Date(),
+            finishedAt: new Date(),
+            errorMessage: message,
+            symbolsUpserted: 0,
+          }),
+        );
+      }
+      this.logger.error(`SSI ingest FAILED (${mappedTradingDate}): ${message}`);
+      return {
+        tradingDate: mappedTradingDate,
+        symbolsUpserted: 0,
+        message,
+      };
+    }
+  }
+
+  private async fetchSsiAllExchanges(): Promise<SsiSymbol[]> {
+    const boardId = this.config.get<string>(
+      'SSI_SNAPSHOT_BOARD_ID',
+      DEFAULT_STOCK_BOARD_ID,
+    );
+    const baseUrl = this.config.get<string>(
+      'SSI_SNAPSHOT_BASE_URL',
+      'https://iboard-query.ssi.com.vn/stock/exchange',
+    );
+    const timeoutMs = Number(
+      this.config.get<string>('SSI_SNAPSHOT_TIMEOUT_MS', '15000'),
+    );
+    const exchanges: readonly SsiExchangePath[] = ['hose', 'hnx', 'upcom'];
+    const headers = this.ssiSnapshotHeaders();
+
+    const all = await Promise.all(
+      exchanges.map(async (exchange) => {
+        const url = `${baseUrl}/${exchange}?boardId=${encodeURIComponent(boardId)}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const resp = await fetch(url, {
+            method: 'GET',
+            headers,
+            signal: controller.signal,
+          });
+          if (!resp.ok) {
+            throw new Error(`SSI ${exchange} HTTP ${resp.status}`);
+          }
+          const json: unknown = await resp.json();
+          return this.extractSsiRows(json);
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
+    return all.flat();
+  }
+
+  private ssiSnapshotHeaders(): Record<string, string> {
+    return {
+      Origin: this.config.get<string>(
+        'SSI_SNAPSHOT_ORIGIN',
+        'https://iboard.ssi.com.vn',
+      ),
+      Referer: this.config.get<string>(
+        'SSI_SNAPSHOT_REFERER',
+        'https://iboard.ssi.com.vn/',
+      ),
+      'User-Agent': this.config.get<string>(
+        'SSI_SNAPSHOT_USER_AGENT',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      ),
+      Accept: 'application/json',
+    };
+  }
+
+  private extractSsiRows(payload: unknown): SsiSymbol[] {
+    if (Array.isArray(payload)) return payload as SsiSymbol[];
+    if (!payload || typeof payload !== 'object') return [];
+    const candidate = payload as SsiResponseLike;
+    if (Array.isArray(candidate.data)) return candidate.data as SsiSymbol[];
+    if (Array.isArray(candidate.items)) return candidate.items as SsiSymbol[];
+    return [];
+  }
+
+  private resolveSsiTradingDate(
+    rows: SsiSymbol[],
+    fallbackYmd: string,
+  ): string {
+    const fromApi = rows.find(
+      (r) => typeof r.tradingDate === 'string',
+    )?.tradingDate;
+    if (!fromApi) return fallbackYmd;
+    const raw = fromApi.trim();
+    if (/^\d{8}$/.test(raw)) {
+      return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    return fallbackYmd;
+  }
+
+  private async upsertSsiDailySeed(
+    rows: SsiSymbol[],
+    tradingDate: string,
+  ): Promise<number> {
+    const stockRows = rows
+      .map((row) => this.toSsiStockSeed(row))
+      .filter((row): row is QueryDeepPartialEntity<Stock> => row !== null);
+
+    if (stockRows.length === 0) return 0;
+
+    await this.stockRepo.upsert(stockRows, {
+      conflictPaths: ['symbol', 'boardId'],
+      skipUpdateIfNoValuesChanged: true,
+    });
+
+    const identityByKey = new Map<
+      string,
+      { symbol: string; boardId: string }
+    >();
+    for (const row of rows) {
+      const symbol = (row.stockSymbol ?? '').trim().toUpperCase();
+      if (!symbol) continue;
+      const boardId = this.resolveSsiBoardId(row.boardId);
+      identityByKey.set(`${symbol}|${boardId}`, { symbol, boardId });
+    }
+    const identities = [...identityByKey.values()];
+    const stocks = await this.stockRepo.find({ where: identities });
+    const stockIdByKey = new Map(
+      stocks.map((s) => [`${s.symbol}|${s.boardId}`, s.id]),
+    );
+
+    const snapshots = rows
+      .map((row) => this.toSsiSnapshotSeed(row, tradingDate, stockIdByKey))
+      .filter(
+        (row): row is QueryDeepPartialEntity<StockBoardSnapshot> =>
+          row !== null,
+      );
+
+    if (snapshots.length > 0) {
+      const activeStockIds = [
+        ...new Set(
+          snapshots
+            .map((item) => item.stockId)
+            .filter(
+              (stockId): stockId is string => typeof stockId === 'string',
+            ),
+        ),
+      ];
+      await this.deleteSnapshotsOutsideTradingDate(tradingDate);
+      await this.deleteStaleSnapshotsForTradingDate(
+        activeStockIds,
+        tradingDate,
+      );
+      await this.snapshotRepo.upsert(snapshots, {
+        conflictPaths: ['stockId', 'tradingDate'],
+        skipUpdateIfNoValuesChanged: true,
+      });
+    }
+
+    return stockRows.length;
+  }
+
+  private toSsiStockSeed(row: SsiSymbol): QueryDeepPartialEntity<Stock> | null {
+    const symbol = (row.stockSymbol ?? '').trim().toUpperCase();
+    if (!symbol) return null;
+    const boardId = this.resolveSsiBoardId(row.boardId);
+    const exchange = this.mapSsiExchange(row.exchange);
+    if (!exchange) return null;
+
+    return {
+      symbol,
+      boardId,
+      name: (row.companyNameVi ?? symbol).trim(),
+      exchange,
+      lotSize: Math.max(1, Math.trunc(toNum(row.tradingUnit) || 100)),
+      isActive: true,
+    };
+  }
+
+  private toSsiSnapshotSeed(
+    row: SsiSymbol,
+    tradingDate: string,
+    stockIdByKey: Map<string, string>,
+  ): QueryDeepPartialEntity<StockBoardSnapshot> | null {
+    const symbol = (row.stockSymbol ?? '').trim().toUpperCase();
+    if (!symbol) return null;
+    const boardId = this.resolveSsiBoardId(row.boardId);
+    const stockId = stockIdByKey.get(`${symbol}|${boardId}`);
+    if (!stockId) return null;
+
+    return {
+      stockId,
+      tradingDate,
+      referencePrice: toNum(row.refPrice),
+      ceilingPrice: toNum(row.ceiling),
+      floorPrice: toNum(row.floor),
+      openPrice: 0,
+      highPrice: 0,
+      lowPrice: 0,
+      lastPrice: 0,
+      lastVolume: 0,
+      totalVolume: 0,
+      totalValue: 0,
+      bidPrice1: 0,
+      bidPrice2: 0,
+      bidPrice3: 0,
+      bidVol1: 0,
+      bidVol2: 0,
+      bidVol3: 0,
+      offerPrice1: 0,
+      offerPrice2: 0,
+      offerPrice3: 0,
+      offerVol1: 0,
+      offerVol2: 0,
+      offerVol3: 0,
+      totalBidQty: 0,
+      totalOfferQty: 0,
+      priceChange: 0,
+      priceChangePct: 0,
+    };
+  }
+
+  private mapSsiExchange(exchange: string | undefined): Exchange | null {
+    const normalized = (exchange ?? '').trim().toUpperCase();
+    if (normalized === 'HOSE') return Exchange.HOSE;
+    if (normalized === 'HNX') return Exchange.HNX;
+    if (normalized === 'UPCOM') return Exchange.UPCOM;
+    return null;
+  }
+
+  private async refreshSymbolsCacheAfterIngest(
+    tradingDate: string,
+  ): Promise<void> {
+    await this.clearOldSymbolsCacheKeys(tradingDate);
+    await this.populateSymbolsCachesForTradingDate(tradingDate);
+  }
+
+  private async clearOldSymbolsCacheKeys(
+    currentTradingDate: string,
+  ): Promise<void> {
+    const pastIngests = await this.ingestRepo.find({
+      select: ['tradingDate'],
+      where: {
+        source: MarketSnapshotSource.SSI,
+        status: MarketSnapshotIngestStatus.SUCCESS,
+      },
+    });
+    const oldTradingDates = [
+      ...new Set(
+        pastIngests
+          .map((item) => item.tradingDate)
+          .filter((tradingDate) => tradingDate !== currentTradingDate),
+      ),
+    ];
+    if (oldTradingDates.length === 0) return;
+
+    const scopes = ['ALL', Exchange.HOSE, Exchange.HNX, Exchange.UPCOM];
+    await Promise.all(
+      oldTradingDates.flatMap((tradingDate) =>
+        scopes.map((scope) =>
+          this.redis.del(marketSymbolsCacheKey(tradingDate, scope)),
+        ),
+      ),
+    );
+  }
+
+  private resolveSsiBoardId(boardId: string | undefined): string {
+    const normalized = (boardId ?? '').trim().toUpperCase();
+    return normalized || DEFAULT_STOCK_BOARD_ID;
+  }
+
+  private async deleteSnapshotsOutsideTradingDate(
+    currentTradingDate: string,
+  ): Promise<void> {
+    await this.snapshotRepo
+      .createQueryBuilder()
+      .delete()
+      .from(StockBoardSnapshot)
+      .where('trading_date <> :currentTradingDate', { currentTradingDate })
+      .execute();
+  }
+
+  private async deleteStaleSnapshotsForTradingDate(
+    activeStockIds: string[],
+    currentTradingDate: string,
+  ): Promise<void> {
+    if (activeStockIds.length === 0) return;
+    await this.snapshotRepo
+      .createQueryBuilder()
+      .delete()
+      .from(StockBoardSnapshot)
+      .where('trading_date = :currentTradingDate', { currentTradingDate })
+      .andWhere('stock_id NOT IN (:...activeStockIds)', { activeStockIds })
+      .execute();
+  }
+
+  private tradingDateYmdVN(): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
   }
 }

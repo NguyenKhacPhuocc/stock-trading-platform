@@ -1,14 +1,10 @@
-import { OrderSide } from '../../common/const';
-import type { QueuedOrder, TradeFillPlan } from './matching-types';
+import { OrderSide } from '../../../common/const';
+import type { QueuedOrder, TradeFillPlan } from '../dto/matching.dto';
 
-/**
- * Một mức giá trong sổ lệnh: gộp tất cả lệnh cùng giá theo thứ tự thời gian (FIFO).
- * totalQty = sum(remainingQty) — cập nhật khi khớp/thêm/xóa để tránh duyệt lại.
- */
 export type PriceLevel = {
   readonly price: number;
   totalQty: number;
-  readonly orders: QueuedOrder[]; // FIFO — index 0 = lệnh cũ nhất
+  readonly orders: QueuedOrder[];
 };
 
 export type SymbolBookSnapshot = {
@@ -16,31 +12,16 @@ export type SymbolBookSnapshot = {
   asks: QueuedOrder[];
 };
 
-/**
- * Sổ lệnh một mã — price-time priority.
- *
- * Cấu trúc: mảng PriceLevel sorted + Map orderId→{side, price} để cancel O(1).
- * - bidLevels: sorted DESC (giá cao → thấp)
- * - askLevels: sorted ASC  (giá thấp → cao)
- *
- * Độ phức tạp:
- *   rest()        — O(log p)  — binary search trên số mức giá p
- *   matchIncoming — O(fills)  — pop từ đầu mảng price levels
- *   removeOrder   — O(1) Map lookup + O(q_at_level) splice
- */
+/** Sổ lệnh một mã — price-time priority (in-memory). */
 export class SymbolBook {
-  readonly bidLevels: PriceLevel[] = []; // sorted DESC
-  readonly askLevels: PriceLevel[] = []; // sorted ASC
+  readonly bidLevels: PriceLevel[] = [];
+  readonly askLevels: PriceLevel[] = [];
 
-  // orderId → { side, price } để removeOrder không phải linear scan toàn book
   private readonly orderIndex = new Map<
     string,
     { side: OrderSide; price: number }
   >();
 
-  // ─── Helpers ───────────────────────────────────────────────────────────────
-
-  /** Binary search vị trí giá trong mảng sorted. Trả về index để insert/find. */
   private priceIdx(levels: PriceLevel[], price: number, desc: boolean): number {
     let lo = 0;
     let hi = levels.length;
@@ -93,9 +74,6 @@ export class SymbolBook {
     }
   }
 
-  // ─── Public API ────────────────────────────────────────────────────────────
-
-  /** Đặt lệnh vào book (sau khi đã xác nhận không khớp hoặc khớp một phần). */
   rest(o: QueuedOrder): void {
     if (o.remainingQty <= 0) return;
     const desc = o.side === OrderSide.BUY;
@@ -109,7 +87,6 @@ export class SymbolBook {
     this.orderIndex.set(o.orderId, { side: o.side, price: o.price });
   }
 
-  /** Xóa lệnh khỏi book theo orderId — dùng khi hủy lệnh. */
   removeOrder(orderId: string): boolean {
     const info = this.orderIndex.get(orderId);
     if (!info) return false;
@@ -134,25 +111,6 @@ export class SymbolBook {
     return true;
   }
 
-  findOrder(orderId: string): QueuedOrder | undefined {
-    const info = this.orderIndex.get(orderId);
-    if (!info) return undefined;
-    const desc = info.side === OrderSide.BUY;
-    const lvl = this.findLevel(
-      desc ? this.bidLevels : this.askLevels,
-      info.price,
-      desc,
-    );
-    return lvl?.orders.find((o) => o.orderId === orderId);
-  }
-
-  /**
-   * Khớp lệnh incoming với book.
-   * - BUY: ghép với ask thấp nhất ≤ giá mua, bỏ qua self-match.
-   * - SELL: ghép với bid cao nhất ≥ giá bán, bỏ qua self-match.
-   * Phần dư (remainder) để caller gọi rest() sau khi persist fills.
-   * removedOrderIds: các lệnh resting đã bị khớp hết → cần log WAL REMOVE.
-   */
   matchIncoming(incoming: QueuedOrder): {
     fills: TradeFillPlan[];
     remainder: QueuedOrder | null;
@@ -168,7 +126,6 @@ export class SymbolBook {
           const lvl = this.askLevels[li];
           if (lvl.price > q.price) break outer;
 
-          // Tìm lệnh đầu tiên không phải self-match tại mức giá này
           for (let oi = 0; oi < lvl.orders.length; oi++) {
             const best = lvl.orders[oi];
             if (best.tradingAccountId === q.tradingAccountId) continue;
@@ -194,7 +151,6 @@ export class SymbolBook {
             }
             continue outer;
           }
-          // Tất cả lệnh tại level này là self-match → thử level tiếp theo
         }
         break;
       }

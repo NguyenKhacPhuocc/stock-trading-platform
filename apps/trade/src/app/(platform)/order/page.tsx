@@ -13,6 +13,8 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { GATEWAY_ORDERS } from '@/lib/gateway-paths';
 import { clearUser } from '@/store/slices/auth.slice';
 import { useOrderBookRealtime } from '@/hooks/use-order-book-realtime';
+import { useTradeRealtimeSocket } from '@/components/trade-realtime-provider';
+import { WS_SERVER_EVT } from '@/lib/ws-realtime.constants';
 
 const ORDER_SYMBOL_STORAGE_KEY = 'trade.order.symbol';
 
@@ -56,6 +58,8 @@ export default function OrderPage() {
   const marketEntities = useAppSelector((s) => s.market.entities);
   const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
   const isHydratingSession = useAppSelector((s) => s.auth.isHydratingSession);
+  const authUserId = useAppSelector((s) => s.auth.user?.id);
+  const socket = useTradeRealtimeSocket();
   const selectedTradingAccountId = useAppSelector((s) => s.auth.selectedTradingAccountId);
   const tradingAccounts = useAppSelector((s) => s.auth.tradingAccounts);
   const selectedAccount = tradingAccounts.find((a) => a.id === selectedTradingAccountId);
@@ -92,21 +96,16 @@ export default function OrderPage() {
     }
   }, [isHydratingSession, isAuthenticated, router]);
 
-  useEffect(() => {
-    if (isHydratingSession || !isAuthenticated) {
-      setOrders([]);
-      setIsLoadingOrders(false);
-      return;
-    }
-    let cancelled = false;
-    const loadOrders = async () => {
-      setIsLoadingOrders(true);
+  const reloadOrders = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (isHydratingSession || !isAuthenticated) return;
+      if (!opts?.silent) setIsLoadingOrders(true);
       try {
         const res = await fetch(GATEWAY_ORDERS.list, {
           credentials: 'same-origin',
         });
         if (res.status === 401) {
-          if (!cancelled) handleSessionExpired();
+          handleSessionExpired();
           return;
         }
         const json = await res.json();
@@ -114,25 +113,53 @@ export default function OrderPage() {
           throw new Error(json?.em || 'Không tải được danh sách lệnh');
         }
         const items = Array.isArray(json?.d) ? json.d : [];
-        if (cancelled) return;
         const mapped = items.map((item: Record<string, unknown>) =>
           mapOrderListItem(item),
         );
         setOrders(mapped);
       } catch (error) {
-        if (cancelled) return;
         const message =
           error instanceof Error ? error.message : 'Không tải được danh sách lệnh';
-        toast.error(message);
+        if (!opts?.silent) toast.error(message);
       } finally {
-        if (!cancelled) setIsLoadingOrders(false);
+        if (!opts?.silent) setIsLoadingOrders(false);
       }
+    },
+    [handleSessionExpired, isAuthenticated, isHydratingSession],
+  );
+
+  const reloadOrdersRef = useRef(reloadOrders);
+  reloadOrdersRef.current = reloadOrders;
+
+  useEffect(() => {
+    if (isHydratingSession || !isAuthenticated) {
+      setOrders([]);
+      setIsLoadingOrders(false);
+      return;
+    }
+    void reloadOrders();
+  }, [isHydratingSession, isAuthenticated, reloadOrders]);
+
+  useEffect(() => {
+    if (!socket || !authUserId || !isAuthenticated) return;
+
+    const subscribeMe = () => {
+      socket.emit('subscribe:me', { userId: authUserId });
     };
-    void loadOrders();
+    const onOrderMatched = () => {
+      void reloadOrdersRef.current({ silent: true });
+    };
+
+    socket.on('connect', subscribeMe);
+    socket.on(WS_SERVER_EVT.ORDER_MATCHED, onOrderMatched);
+    if (socket.connected) subscribeMe();
+
     return () => {
-      cancelled = true;
+      socket.off('connect', subscribeMe);
+      socket.off(WS_SERVER_EVT.ORDER_MATCHED, onOrderMatched);
+      socket.emit('unsubscribe:me', { userId: authUserId });
     };
-  }, [handleSessionExpired, isAuthenticated, isHydratingSession]);
+  }, [socket, authUserId, isAuthenticated]);
 
   useEffect(() => {
     if (searchUniverse.length === 0 || orderSymbolBootstrapped) return;
@@ -169,35 +196,6 @@ export default function OrderPage() {
   const baseValid = Boolean(effectiveSymbol) && Number(quantity) > 0 && (!isLo || Number(price) > 0);
   const canSubmit =
     orderEntryTab === 'regular' ? baseValid : baseValid && Number(triggerPrice) > 0;
-
-  const reloadOrders = async () => {
-    if (isHydratingSession || !isAuthenticated) return;
-    setIsLoadingOrders(true);
-    try {
-      const res = await fetch(GATEWAY_ORDERS.list, {
-        credentials: 'same-origin',
-      });
-      if (res.status === 401) {
-        handleSessionExpired();
-        return;
-      }
-      const json = await res.json();
-      if (!res.ok || json?.s !== 'ok') {
-        throw new Error(json?.em || 'Không tải được danh sách lệnh');
-      }
-      const items = Array.isArray(json?.d) ? json.d : [];
-      const mapped = items.map((item: Record<string, unknown>) =>
-        mapOrderListItem(item),
-      );
-      setOrders(mapped);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Không tải được danh sách lệnh';
-      toast.error(message);
-    } finally {
-      setIsLoadingOrders(false);
-    }
-  };
 
   const handleSubmitOrder = async () => {
     if (!canSubmit || isSubmittingOrder) return;

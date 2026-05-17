@@ -26,6 +26,11 @@ export type LiveOrderBookState = {
 
 type Level = { price: number; amount: number };
 
+type BookState = {
+  sym: string;
+  book: LiveOrderBookState | null;
+};
+
 /** Apply BOOK_DELTA: chỉ cập nhật các mức có thay đổi, v=0 → xóa mức. */
 function applyBookDelta(
   prev: Level[],
@@ -169,12 +174,12 @@ function mergeMarketDelta(
 /** Subscribe một mã (`room:i:<SB>`) + nhận tin `i`. */
 export function useOrderBookRealtime(symbol: string): LiveOrderBookState | null {
   const socket = useTradeRealtimeSocket();
-  const [book, setBook] = useState<LiveOrderBookState | null>(null);
+  const [live, setLive] = useState<BookState>({ sym: '', book: null });
+  const sym = symbol.trim().toUpperCase();
 
   useEffect(() => {
-    const sym = symbol.trim().toUpperCase();
     if (!socket || !sym) {
-      queueMicrotask(() => setBook(null));
+      queueMicrotask(() => setLive({ sym: '', book: null }));
       return;
     }
 
@@ -201,7 +206,10 @@ export function useOrderBookRealtime(symbol: string): LiveOrderBookState | null 
         tyRaw !== WS_INSTRUMENT_TY.BOOK_DELTA
       )
         return;
-      setBook((prev) => mergeMarketDelta(prev, m));
+      setLive((prev) => ({
+        sym,
+        book: mergeMarketDelta(prev.sym === sym ? prev.book : null, m),
+      }));
     };
 
     socket.on('connect', subscribe);
@@ -213,7 +221,7 @@ export function useOrderBookRealtime(symbol: string): LiveOrderBookState | null 
       socket.off(WS_SERVER_EVT.INSTRUMENT, onInstrument);
       socket.emit('unsubscribe:i', { SB: [sym] });
     };
-  }, [socket, symbol]);
+  }, [socket, sym]);
 
-  return book;
+  return live.sym === sym ? live.book : null;
 }

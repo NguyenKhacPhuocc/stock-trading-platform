@@ -87,6 +87,12 @@ const ERROR_MESSAGES: Record<AppErrorCode, LocalizedMessage> = {
     vi: 'Token không hợp lệ',
     en: 'Invalid token',
   },
+  FO0019: {
+    vi: (p) =>
+      `Chưa có mã ${String(p?.symbol ?? 'VCB')} trong hệ thống. Admin cần sync bảng giá SSI trước khi đăng ký.`,
+    en: (p) =>
+      `Stock ${String(p?.symbol ?? 'VCB')} is not in the system. Run SSI snapshot sync before registration.`,
+  },
 };
 
 function renderTemplate(

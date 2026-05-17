@@ -1,40 +1,41 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
-import {
-  OrderStatus,
-  OrderSide,
-  TransactionType,
-} from '../../common/const';
-import type { TradeFillPlan } from './matching-types';
+import { OrderStatus, OrderSide, TransactionType } from '../../common/const';
+import { TradingAccount } from '../../database/entities/trading-account.entity';
+import type { TradeFillPlan } from './dto/matching.dto';
+import type { OrderFillNotify } from './dto/order-fill-notify.dto';
 
+/** Ghi khớp lệnh: orders, trades, ví, position. */
 @Injectable()
-export class MatchingPersistenceService {
-  constructor(
-    private readonly dataSource: DataSource,
-    @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
-  ) {}
+export class TradeFillService {
+  constructor(private readonly dataSource: DataSource) {}
 
-  async applyFills(fills: TradeFillPlan[]): Promise<{ lastTradePrice: number | null }> {
-    if (fills.length === 0) return { lastTradePrice: null };
+  async applyFills(
+    fills: TradeFillPlan[],
+  ): Promise<{ lastTradePrice: number | null; notifies: OrderFillNotify[] }> {
+    if (fills.length === 0) return { lastTradePrice: null, notifies: [] };
 
     let lastPx: number | null = null;
+    const notifies: OrderFillNotify[] = [];
+    const seenOrderIds = new Set<string>();
     await this.dataSource.transaction(async (manager) => {
       for (const fill of fills) {
-        lastPx = await this.applyOneFill(manager, fill);
+        lastPx = await this.applyOneFill(manager, fill, notifies, seenOrderIds);
       }
     });
-    return { lastTradePrice: lastPx };
+    return { lastTradePrice: lastPx, notifies };
   }
 
   private async applyOneFill(
     manager: EntityManager,
     fill: TradeFillPlan,
+    notifies: OrderFillNotify[],
+    seenOrderIds: Set<string>,
   ): Promise<number> {
     const buyOrder = await manager.findOne(Order, {
       where: { id: fill.buyOrderId },
@@ -102,7 +103,6 @@ export class MatchingPersistenceService {
       throw new Error('Không tìm thấy ví');
     }
 
-    /** Khóa ban đầu theo giới hạn mua; hoàn phần chênh nếu khớp giá tốt hơn. */
     buyerWallet.lockedBalance =
       Number(buyerWallet.lockedBalance) - limitBuy * mq;
     buyerWallet.availableBalance =
@@ -156,11 +156,11 @@ export class MatchingPersistenceService {
       throw new Error('Không có position bên bán');
     }
 
+    // quantity đã trừ lúc đặt lệnh bán; khớp chỉ giảm phần phong tỏa
     sellerPos.lockedQuantity = Math.max(
       0,
       Number(sellerPos.lockedQuantity) - mq,
     );
-    sellerPos.quantity = Number(sellerPos.quantity) - mq;
     await manager.save(Position, sellerPos);
 
     const oldQty = buyerPos ? Number(buyerPos.quantity) : 0;
@@ -189,6 +189,33 @@ export class MatchingPersistenceService {
       );
     }
 
+    await this.pushOrderNotify(manager, buyOrder, notifies, seenOrderIds);
+    await this.pushOrderNotify(manager, sellOrder, notifies, seenOrderIds);
+
     return px;
+  }
+
+  private async pushOrderNotify(
+    manager: EntityManager,
+    order: Order,
+    notifies: OrderFillNotify[],
+    seenOrderIds: Set<string>,
+  ): Promise<void> {
+    if (seenOrderIds.has(order.id)) return;
+    seenOrderIds.add(order.id);
+
+    const account = await manager.findOne(TradingAccount, {
+      where: { id: order.tradingAccountId },
+    });
+    if (!account) return;
+
+    notifies.push({
+      orderId: order.id,
+      userId: account.userId,
+      status: order.status,
+      matchedQty: Number(order.matchedQty),
+      quantity: Number(order.quantity),
+      side: order.side,
+    });
   }
 }

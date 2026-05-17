@@ -9,13 +9,11 @@ import {
   Unique,
 } from 'typeorm';
 import { Stock } from './stock.entity';
-import { MarketSnapshotSource } from '../../common/const';
 
 /**
  * Snapshot bảng giá theo ngày giao dịch — một dòng / mã / ngày.
- * Đầu ngày: seed từ SSI (TC/trần/sàn, metadata tham chiếu).
- * Trong phiên: engine mô phỏng có thể cập nhật depth/khớp nội bộ vào cùng snapshot
- * để người dùng theo dõi một dòng dữ liệu liên tục trong hệ thống.
+ * Seed từ SSI (admin refresh): chỉ TC / trần / sàn; tên mã + sàn giao dịch ở bảng `stocks`.
+ * Trong phiên: engine mô phỏng cập nhật depth/khớp vào các cột giá/KL còn lại.
  */
 @Entity('stock_board_snapshots')
 @Unique(['stockId', 'tradingDate'])
@@ -187,24 +185,6 @@ export class StockBoardSnapshot {
 
   @Column({ name: 'total_offer_qty', type: 'int', default: 0 })
   totalOfferQty: number;
-
-  /** varchar để tránh trùng enum PG với `market_snapshot_ingests.source` */
-  @Column({
-    name: 'ingest_source',
-    type: 'varchar',
-    length: 32,
-    default: MarketSnapshotSource.SSI,
-  })
-  ingestSource: MarketSnapshotSource;
-
-  @Column({ name: 'ingested_at', type: 'timestamptz', nullable: true })
-  ingestedAt: Date | null;
-
-  @Column({ name: 'raw_payload', type: 'jsonb', nullable: true })
-  rawPayload: Record<string, unknown> | null;
-
-  @Column({ name: 'session_code', type: 'varchar', length: 32, nullable: true })
-  sessionCode: string | null;
 
   @Column({
     name: 'price_change',

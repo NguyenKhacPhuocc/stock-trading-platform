@@ -7,7 +7,7 @@ import { Trade } from '../../database/entities/trade.entity';
 import { Stock } from '../../database/entities/stock.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { DEFAULT_STOCK_BOARD_ID } from '../../common/const';
-import { MarketSnapshotIngestService } from '../market/market-snapshot-ingest.service';
+import { MarketService } from '../market/market.service';
 
 @Injectable()
 export class AdminService {
@@ -18,7 +18,7 @@ export class AdminService {
     @InjectRepository(Stock) private stockRepo: Repository<Stock>,
     @InjectRepository(SystemConfig)
     private configRepo: Repository<SystemConfig>,
-    private readonly marketSnapshotIngest: MarketSnapshotIngestService,
+    private readonly market: MarketService,
   ) {}
 
   async getStats() {
@@ -73,6 +73,6 @@ export class AdminService {
   }
 
   forceRefreshMarketSnapshot() {
-    return this.marketSnapshotIngest.forceRefreshToday();
+    return this.market.forceRefreshMarketSnapshot();
   }
 }

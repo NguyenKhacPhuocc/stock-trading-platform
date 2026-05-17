@@ -10,7 +10,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Inject, Logger, forwardRef } from '@nestjs/common';
 import { buildRealtimeEnvelope } from './realtime-envelope.util';
-import { MarketRealtimePublisherService } from '../modules/matching/market-realtime-publisher.service';
+import { MatchingService } from '../modules/matching/matching.service';
 import {
   WS_EVT,
   WS_ROOM_IDX,
@@ -76,8 +76,8 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(AppGateway.name);
 
   constructor(
-    @Inject(forwardRef(() => MarketRealtimePublisherService))
-    private readonly marketPublisher: MarketRealtimePublisherService,
+    @Inject(forwardRef(() => MatchingService))
+    private readonly matching: MatchingService,
   ) {}
 
   handleConnection(client: Socket) {
@@ -86,6 +86,27 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected: ${client.id}`);
+  }
+
+  /** Join room `user:<userId>` để nhận `order:matched`. */
+  @SubscribeMessage('subscribe:me')
+  handleSubscribeMe(
+    @MessageBody() data: { userId?: string } | undefined,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = typeof data?.userId === 'string' ? data.userId.trim() : '';
+    if (!userId) return;
+    void client.join(`user:${userId}`);
+  }
+
+  @SubscribeMessage('unsubscribe:me')
+  handleUnsubscribeMe(
+    @MessageBody() data: { userId?: string } | undefined,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = typeof data?.userId === 'string' ? data.userId.trim() : '';
+    if (!userId) return;
+    void client.leave(`user:${userId}`);
   }
 
   /**
@@ -99,7 +120,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     for (const sb of normalizeSymbolList(data?.SB)) {
       void client.join(wsRoomInstrument(sb));
-      void this.marketPublisher
+      void this.matching
         .publishSubscribeOrderbookBySymbol(sb)
         .catch((e: unknown) => {
           this.logger.warn(`publishSubscribeOrderbookBySymbol: ${String(e)}`);
@@ -148,7 +169,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     void client.leave(WS_ROOM_IDX);
   }
 
-  /** Tick TOP sổ / khớp — tới `room:i:<SB>` và `room:e:<EX>` (không có payload MB). */
+  /**
+   * Tick TOP sổ / khớp — fan-out `room:i:<SB>` và `room:e:<EX>`.
+   * Dùng một broadcast chain để client join cả hai room chỉ nhận một lần.
+   */
   emitInstrumentTick(
     envelope: {
       ty: string;
@@ -159,16 +183,15 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     stockExchange?: string | null,
   ) {
     const sym = envelope.SB.toUpperCase();
-    void this.server
-      .to(wsRoomInstrument(sym))
-      .emit(WS_EVT.INSTRUMENT, envelope);
+    let broadcast = this.server.to(wsRoomInstrument(sym));
     const ex =
       stockExchange != null && stockExchange !== ''
         ? normalizeWsExchangeStrict(stockExchange)
         : null;
     if (ex) {
-      void this.server.to(wsRoomExchange(ex)).emit(WS_EVT.INSTRUMENT, envelope);
+      broadcast = broadcast.to(wsRoomExchange(ex));
     }
+    void broadcast.emit(WS_EVT.INSTRUMENT, envelope);
   }
 
   emitRealtimeToRoom<TData>(input: {

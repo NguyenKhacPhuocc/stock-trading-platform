@@ -7,7 +7,9 @@ export const WS_TY = {
 } as const;
 
 /** Instrument → khóa ngắn (đồng bộ naming legacy board). */
-export function compactInstrumentDto(d: MarketInstrumentDto): Record<string, unknown> {
+export function compactInstrumentDto(
+  d: MarketInstrumentDto,
+): Record<string, unknown> {
   const o: Record<string, unknown> = {
     SB: d.symbol,
     SI: d.stockId,
@@ -53,7 +55,9 @@ export function compactInstrumentDto(d: MarketInstrumentDto): Record<string, unk
 }
 
 /** Delta sổ TOP 3 × 2 cạnh — compact key như bootstrap (B/V mua, S/U bán). */
-export function compactOrderbookDelta(changes: Record<string, unknown>): Record<string, unknown> {
+export function compactOrderbookDelta(
+  changes: Record<string, unknown>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const rows: ReadonlyArray<readonly [string, string, string, string]> = [
     ['bid1Price', 'bid1Volume', 'B1', 'V1'],
@@ -70,7 +74,10 @@ export function compactOrderbookDelta(changes: Record<string, unknown>): Record<
   return out;
 }
 
-export function compactTradeTick(lastPrice: number, matchedVolume: number): Record<string, unknown> {
+export function compactTradeTick(
+  lastPrice: number,
+  matchedVolume: number,
+): Record<string, unknown> {
   return {
     CP: lastPrice,
     CV: matchedVolume,

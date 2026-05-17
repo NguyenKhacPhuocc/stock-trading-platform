@@ -67,6 +67,11 @@ export class AdminController {
     return this.admin.setConfig(key, dto.value, dto.description);
   }
 
+  /**
+   * Sync dữ liệu snapshot từ SSI (manual trigger bởi admin).
+   * Gọi API SSI → upsert `stocks` + `stock_board_snapshots` cho ngày hiện tại.
+   * Response: { skipped, tradingDate, symbolsUpserted, message }
+   */
   @Post('market/snapshot/refresh')
   @HttpCode(HttpStatus.OK)
   forceRefreshMarketSnapshot() {

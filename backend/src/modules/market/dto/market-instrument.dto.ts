@@ -47,3 +47,10 @@ export interface MarketInstrumentDto {
   ts: number;
   kid: string;
 }
+
+/** Kết quả admin sync snapshot SSI */
+export interface MarketSnapshotIngestResultDto {
+  tradingDate: string;
+  symbolsUpserted: number;
+  message: string;
+}

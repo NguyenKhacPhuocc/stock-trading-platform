@@ -100,7 +100,7 @@ export function OrderMainBottomPanel({
                 orders.map((order) => (
                   <tr key={order.id} className="border-b border-border/60">
                     <td className="px-2 py-2">
-                      {order.status === 'pending' ? (
+                      {order.status === 'pending' || order.status === 'partial' ? (
                         <button
                           type="button"
                           onClick={() => onCancelOrder(order.id)}

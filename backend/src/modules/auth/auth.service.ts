@@ -24,6 +24,7 @@ import {
 } from '../../common/const';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
+import { WalletService } from '../wallet/wallet.service';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -53,6 +54,7 @@ export class AuthService {
     private jwt: JwtService,
     private dataSource: DataSource,
     private config: ConfigService,
+    private walletService: WalletService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -127,13 +129,21 @@ export class AuthService {
             }),
           );
 
-          const initialWalletBalance = this.getInitialWalletBalance();
-          await manager.save(
+          const initialWalletBalance =
+            this.walletService.getInitialWalletBalance();
+          const wallet = await manager.save(
             manager.create(Wallet, {
               tradingAccountId: account.id,
               availableBalance: initialWalletBalance,
               lockedBalance: 0,
             }),
+          );
+
+          await this.walletService.applyNewAccountGift(
+            manager,
+            wallet,
+            initialWalletBalance,
+            { throwIfStockMissing: true },
           );
 
           if (seqRow) {
@@ -307,13 +317,6 @@ export class AuthService {
   private async getConfigValue(key: string, fallback: string): Promise<string> {
     const row = await this.configRepo.findOne({ where: { key } });
     return row?.value ?? fallback;
-  }
-
-  private getInitialWalletBalance(): number {
-    const raw = this.config.get<string>('INITIAL_WALLET_BALANCE');
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-    return 1_000_000_000;
   }
 
   private isUniqueViolation(err: unknown): boolean {

@@ -1,6 +1,5 @@
 import type { PriceLevel, SymbolBook } from './symbol-book';
 
-/** TOP 3 mức — dùng cho diff delta bảng giá (compact WS). */
 export type DepthSnapshot = {
   bid1Price?: number;
   bid1Volume?: number;
@@ -31,10 +30,6 @@ export const BOOK_DEPTH_KEYS: (keyof DepthSnapshot)[] = [
   'ask3Volume',
 ];
 
-/**
- * Lấy tối đa maxLevels mức giá từ PriceLevel array — O(maxLevels).
- * Thay thế aggregateMergedLevels (flat array scan) — PriceLevel đã gộp sẵn.
- */
 export function aggregatePriceLevels(
   levels: readonly PriceLevel[],
   maxLevels: number,
@@ -48,7 +43,6 @@ export function aggregatePriceLevels(
   return out;
 }
 
-/** TOP 3 mỗi bên — dùng để diff delta ORDERBOOK_DELTA (bảng giá compact). */
 export function summarizeBookDepth(book: SymbolBook): DepthSnapshot {
   const bids = aggregatePriceLevels(book.bidLevels, 3);
   const asks = aggregatePriceLevels(book.askLevels, 3);

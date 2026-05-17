@@ -65,7 +65,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.publish(channel, message);
   }
 
-  async hSet(key: string, fieldValues: Record<string, string | number>): Promise<void> {
+  async hSet(
+    key: string,
+    fieldValues: Record<string, string | number>,
+  ): Promise<void> {
     await this.client.hSet(key, fieldValues);
   }
 
