@@ -36,6 +36,16 @@ export class OrderbookRedisService {
     }
   }
 
+  async clearSymbol(symbolUpper: string): Promise<void> {
+    const sym = symbolUpper.trim().toUpperCase();
+    try {
+      await this.redis.del(orderbookSideRedisKey(sym, 'buy'));
+      await this.redis.del(orderbookSideRedisKey(sym, 'sell'));
+    } catch (e: unknown) {
+      this.logger.warn(`clearSymbol ${sym}: ${String(e)}`);
+    }
+  }
+
   async readSnapshot(symbolUpper: string): Promise<{
     bids: Array<{ price: number; amount: number }>;
     asks: Array<{ price: number; amount: number }>;

@@ -6,8 +6,9 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ChevronDown } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
 import { clearUser, setSelectedTradingAccountId } from '@/store/slices/auth.slice';
-import { bffClient } from '@stock/utils';
+import { bffClient, queryClient } from '@stock/utils';
 import { GATEWAY_AUTH } from '@/lib/gateway-paths';
+import { AUTH_SESSION_QUERY_KEY } from '@/lib/fetch-auth-session';
 import AuthPopup from './auth-popup';
 
 export default function TradeHeader() {
@@ -53,6 +54,7 @@ export default function TradeHeader() {
     } catch {
       // Cookie có thể đã hết; vẫn xóa state phía client
     }
+    queryClient.setQueryData(AUTH_SESSION_QUERY_KEY, null);
     dispatch(clearUser());
     setAccountMenuOpen(false);
     router.refresh();

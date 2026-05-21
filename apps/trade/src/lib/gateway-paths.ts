@@ -33,3 +33,11 @@ export const GATEWAY_ORDERS = {
   place: ORDERS_GW,
   cancel: (id: string) => `${ORDERS_GW}/${id}/cancel`,
 } as const;
+
+// ─── Trades gateway paths ─────────────────────────────────────────────────────
+
+const TRADES_GW = `${TRADE_BASE_PATH}/api/gateway/trades`;
+
+export const GATEWAY_TRADES = {
+  history: (stockId: string) => `${TRADES_GW}/history/${stockId}`,
+} as const;

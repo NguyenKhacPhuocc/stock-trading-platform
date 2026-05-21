@@ -43,6 +43,18 @@ export function aggregatePriceLevels(
   return out;
 }
 
+/** Tổng KL còn lại trên sổ RAM (TB/TO bảng giá). */
+export function bookDepthTotals(book: SymbolBook): {
+  totalBid: number;
+  totalOffer: number;
+} {
+  let totalBid = 0;
+  let totalOffer = 0;
+  for (const lvl of book.bidLevels) totalBid += lvl.totalQty;
+  for (const lvl of book.askLevels) totalOffer += lvl.totalQty;
+  return { totalBid, totalOffer };
+}
+
 export function summarizeBookDepth(book: SymbolBook): DepthSnapshot {
   const bids = aggregatePriceLevels(book.bidLevels, 3);
   const asks = aggregatePriceLevels(book.askLevels, 3);

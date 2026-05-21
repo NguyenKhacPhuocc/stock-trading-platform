@@ -13,6 +13,7 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { Repository } from 'typeorm';
 import { Order } from '../../database/entities/order.entity';
+import { Trade } from '../../database/entities/trade.entity';
 import { OrderStatus } from '../../common/const';
 import { MarketService } from '../market/market.service';
 import type { QueuedOrder } from './dto/matching.dto';
@@ -26,16 +27,18 @@ import { OrderbookWalService } from './orderbook-wal.service';
 import { OrderbookWsService } from './orderbook-ws.service';
 import { AppGateway } from '../../websocket/app.gateway';
 import type { OrderFillNotify } from './dto/order-fill-notify.dto';
+import { bookOrdersLine, orderRef } from './util/order-flow-log.util';
 
 /**
- * Điều phối khớp lệnh: hàng đợi BullMQ, sổ in-memory, WAL, WS.
- * Chi tiết ghi DB / Redis / socket nằm ở các service tên theo việc làm.
+ * Khớp lệnh: BullMQ → SymbolBook (RAM) → TradeFillService (DB) → WAL/Redis/WS.
+ * Luồng đầy đủ: DO-AN-SAN-CHUNG-KHOAN-TECH-SPEC.md §6.3.1
  */
 @Injectable()
 export class MatchingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MatchingService.name);
   private readonly eventEmitter = new EventEmitter();
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly tradeSeqCounters = new Map<string, number>();
 
   private connection?: IORedis;
   private queue?: Queue;
@@ -51,6 +54,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     @Inject(forwardRef(() => AppGateway))
     private readonly gateway: AppGateway,
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
+    @InjectRepository(Trade) private readonly tradeRepo: Repository<Trade>,
   ) {}
 
   onModuleInit(): void {
@@ -65,8 +69,14 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     await this.connection?.quit();
   }
 
-  async enqueueAccepted(orderId: string, stockId: string): Promise<void> {
-    await this.queue!.add(
+  async enqueueAccepted(
+    orderId: string,
+    stockId: string,
+    orderCode?: string | null,
+    symbol?: string,
+  ): Promise<void> {
+    const ref = orderRef(orderId, orderCode);
+    const job = await this.queue!.add(
       'accepted',
       { orderId, stockId },
       {
@@ -76,14 +86,19 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         backoff: { type: 'exponential', delay: 500 },
       },
     );
+    this.logger.log(
+      `[order-flow] added to queue accepted | order ${ref}${symbol ? ` ${symbol.toUpperCase()}` : ''} jobId=${job.id}`,
+    );
   }
 
   async enqueueCancelled(
     orderId: string,
     stockId: string,
     symbol: string,
+    orderCode?: string | null,
   ): Promise<void> {
-    await this.queue!.add(
+    const ref = orderRef(orderId, orderCode);
+    const job = await this.queue!.add(
       'cancelled',
       { orderId, stockId, symbol },
       {
@@ -92,6 +107,9 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         attempts: 3,
         backoff: { type: 'exponential', delay: 500 },
       },
+    );
+    this.logger.log(
+      `[order-flow] added to queue cancelled | order ${ref} ${symbol.toUpperCase()} jobId=${job.id}`,
     );
   }
 
@@ -119,30 +137,46 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
   };
 
   private async onBookUpdated(p: BookUpdatedPayload): Promise<void> {
-    await this.market
-      .refreshBoardForStock(p.stockId)
-      .catch((e: unknown) =>
-        this.logger.warn(`refreshBoardForStock: ${String(e)}`),
-      );
+    this.logger.log(
+      `[order-flow] book:updated ${p.symbol.toUpperCase()} | fills=${p.fillsCount} ${bookOrdersLine(p.book)}`,
+    );
     await this.orderbookWs.emitBookUpdate(p.symbol, p.book, p.stockId);
-
-    if (p.fillsCount > 0 && p.lastTradePrice != null && p.lastMatchedQty > 0) {
-      this.orderbookWs.emitTradeTick(
-        p.symbol,
-        p.stockId,
-        p.lastTradePrice,
-        p.lastMatchedQty,
-      );
-    }
+    this.orderbookWs.emitBoardDepthFromBook(p.symbol, p.stockId, p.book);
+    this.scheduleBoardSnapshotPersist(p.stockId, p.fillsCount > 0);
   }
 
   private async onBookCancelled(p: BookCancelledPayload): Promise<void> {
-    await this.market
-      .refreshBoardForStock(p.stockId)
-      .catch((e: unknown) =>
-        this.logger.warn(`refreshBoardForStock: ${String(e)}`),
-      );
+    this.logger.log(
+      `[order-flow] book:cancelled ${p.symbol.toUpperCase()} | ${bookOrdersLine(p.book)}`,
+    );
     await this.orderbookWs.emitBookUpdate(p.symbol, p.book, p.stockId);
+    this.orderbookWs.emitBoardDepthFromBook(p.symbol, p.stockId, p.book);
+    this.scheduleBoardSnapshotPersist(p.stockId, false);
+  }
+
+  /** Ghi snapshot DB nền — không rebuild cache symbols (tránh ~1s chặn hot path). */
+  private scheduleBoardSnapshotPersist(
+    stockId: string,
+    emitBoardAfterPersist: boolean,
+  ): void {
+    void (async () => {
+      try {
+        const board = await this.market.refreshBoardForStock(stockId, {
+          rebuildSymbolsCache: false,
+        });
+        if (!board || !emitBoardAfterPersist) return;
+        this.orderbookWs.emitPriceBoardFromSnapshot(
+          board.symbol,
+          board.stockId,
+          board.snap,
+          false,
+        );
+      } catch (e: unknown) {
+        this.logger.warn(
+          `[order-flow] refreshBoardForStock (background): ${String(e)}`,
+        );
+      }
+    })();
   }
 
   private initBullMq(): void {
@@ -222,17 +256,34 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
       where: { id: orderId },
       relations: { stock: true },
     });
-    if (!order?.stock) return;
+    const ref = orderRef(orderId, order?.orderCode);
+    if (!order?.stock) {
+      this.logger.warn(`[order-flow] skip matching | order ${ref} not found`);
+      return;
+    }
+    const sym = order.stock.symbol.toUpperCase();
     if (
       order.status === OrderStatus.CANCELLED ||
       order.status === OrderStatus.REJECTED ||
       order.status === OrderStatus.FILLED
     ) {
+      this.logger.log(
+        `[order-flow] skip matching | order ${ref} status=${order.status}`,
+      );
       return;
     }
 
     const remaining = Number(order.quantity) - Number(order.matchedQty);
-    if (remaining <= 0) return;
+    if (remaining <= 0) {
+      this.logger.log(
+        `[order-flow] skip matching | order ${ref} no remaining qty`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `[order-flow] worker start matching | order ${ref} ${order.side.toUpperCase()} ${remaining} ${sym} @ ${order.price}`,
+    );
 
     const queued: QueuedOrder = {
       orderId: order.id,
@@ -244,14 +295,29 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
       createdAtMs: order.createdAt.getTime(),
     };
 
-    const sym = order.stock.symbol.toUpperCase();
     const book = this.books.getBook(stockId);
+    await this.orderbookWs.ensureBookReady(sym, stockId, book, order.id);
+    this.logger.log(
+      `[order-flow] book before match ${sym} | ${bookOrdersLine(book)}`,
+    );
     const snap = book.snapshot();
 
     try {
       const { fills, remainder, removedOrderIds } = book.matchIncoming(queued);
 
+      if (fills.length === 0) {
+        this.logger.log(`[order-flow] no match in book | order ${ref}`);
+      }
+      for (const fill of fills) {
+        this.logger.log(
+          `[order-flow] matched | buy ${orderRef(fill.buyOrderId)} x sell ${orderRef(fill.sellOrderId)} qty=${fill.quantity} @ ${fill.price}`,
+        );
+      }
+
       for (const oid of removedOrderIds) {
+        this.logger.log(
+          `[order-flow] order removed from book RAM | ${orderRef(oid)}`,
+        );
         await this.wal.appendRemove(sym, stockId, oid);
       }
 
@@ -259,15 +325,27 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
       let lastMq = 0;
 
       if (fills.length > 0) {
-        const fillResult = await this.tradeFill.applyFills(fills);
+        this.logger.log(
+          `[order-flow] persist fills DB | ${fills.length} trade(s)`,
+        );
+        const fillResult = await this.tradeFill.applyFills(fills, sym);
         lastPx = fillResult.lastTradePrice;
         lastMq = fills[fills.length - 1]?.quantity ?? 0;
         this.emitOrderMatchedNotifies(fillResult.notifies);
+        this.emitTradeTicks(stockId, fills);
       }
 
       if (remainder && remainder.remainingQty > 0) {
+        this.logger.log(
+          `[order-flow] order rest on book | ${orderRef(remainder.orderId)} qty=${remainder.remainingQty} @ ${remainder.price}`,
+        );
+        book.removeOrder(remainder.orderId);
         book.rest(remainder);
         await this.wal.appendRest(sym, stockId, remainder);
+      }
+
+      if (fills.length > 0) {
+        await this.orderbookWs.syncBookFromDb(sym, stockId, book);
       }
 
       this.eventEmitter.emit('book:updated', {
@@ -279,6 +357,9 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         fillsCount: fills.length,
       } satisfies BookUpdatedPayload);
     } catch (e: unknown) {
+      this.logger.error(
+        `[order-flow] matching failed | order ${ref}: ${String(e)}`,
+      );
       book.restore(snap);
       throw e;
     }
@@ -290,10 +371,18 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     symbol: string,
   ): Promise<void> {
     const sym = symbol.toUpperCase();
+    const ref = orderRef(orderId);
+    this.logger.log(`[order-flow] worker start cancel | order ${ref} ${sym}`);
     const book = this.books.getBook(stockId);
     const removed = book.removeOrder(orderId);
     if (removed) {
+      this.logger.log(`[order-flow] order removed from book RAM | ${ref}`);
       await this.wal.appendRemove(sym, stockId, orderId);
+    } else {
+      this.logger.log(`[order-flow] order not on book RAM | ${ref}`);
+    }
+    if (!removed) {
+      await this.orderbookWs.syncBookFromDb(sym, stockId, book);
     }
     this.eventEmitter.emit('book:cancelled', {
       symbol: sym,
@@ -304,7 +393,38 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
 
   private emitOrderMatchedNotifies(notifies: OrderFillNotify[]): void {
     for (const n of notifies) {
+      this.logger.log(
+        `[order-flow] emit WS order:matched | orderId=${n.orderId} userId=${n.userId.slice(0, 8)} status=${n.status} matched=${n.matchedQty}/${n.quantity}`,
+      );
       this.gateway.emitOrderMatched(n.userId, n);
+    }
+  }
+
+  private emitTradeTicks(
+    stockId: string,
+    fills: Array<{ quantity: number; price: number }>,
+  ): void {
+    if (fills.length === 0) return;
+
+    for (const fill of fills) {
+      const seq = (this.tradeSeqCounters.get(stockId) ?? 0) + 1;
+      this.tradeSeqCounters.set(stockId, seq);
+
+      const compactPayload = {
+        px: fill.price,
+        qty: fill.quantity,
+        ts: new Date().toISOString(),
+      };
+
+      this.logger.log(
+        `[order-flow] emit WS ot | stockId=${stockId.slice(0, 8)} seq=${seq} px=${fill.price} qty=${fill.quantity}`,
+      );
+      this.gateway.emitTradeTick({
+        stockId,
+        type: 'ot',
+        seq,
+        data: compactPayload,
+      });
     }
   }
 }

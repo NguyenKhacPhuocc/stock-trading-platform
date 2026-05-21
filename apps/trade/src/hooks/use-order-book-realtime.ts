@@ -112,52 +112,45 @@ function mergeMarketDelta(
       );
     }
   } else if (tyRaw === 'OB' || tyRaw === WS_INSTRUMENT_TY.ORDERBOOK) {
-    // ORDERBOOK_DELTA TOP3 — chỉ dùng khi chưa có snapshot (bảng giá bootstrap)
-    const hasSnapshot = bids.length > 0 || asks.length > 0;
-    if (!hasSnapshot) {
-      let bidTouched = false;
-      const slotB: Array<Level | undefined> = [bids[0], bids[1], bids[2]].map(
-        (r) => (r ? { ...r } : undefined),
-      );
-      BID_OB_KEYS.forEach(([B, V, pL, vL], idx) => {
-        if (!levelTouched(c, B, V, pL, vL)) return;
-        bidTouched = true;
-        const pRaw = readCornerField(c, B, pL);
-        const vRaw = readCornerField(c, V, vL);
-        if (pRaw === null || vRaw === null) {
-          slotB[idx] = undefined;
-          return;
-        }
-        const pr = typeof pRaw === 'number' ? pRaw : slotB[idx]?.price;
-        const vr = typeof vRaw === 'number' ? vRaw : slotB[idx]?.amount;
-        if (pr !== undefined && vr !== undefined && pr > 0 && vr >= 0)
-          slotB[idx] = { price: pr, amount: vr };
-      });
-      if (bidTouched)
-        bids = slotB.filter((s): s is Level => s !== undefined);
+    let bidTouched = false;
+    const slotB: Array<Level | undefined> = [bids[0], bids[1], bids[2]].map(
+      (r) => (r ? { ...r } : undefined),
+    );
+    BID_OB_KEYS.forEach(([B, V, pL, vL], idx) => {
+      if (!levelTouched(c, B, V, pL, vL)) return;
+      bidTouched = true;
+      const pRaw = readCornerField(c, B, pL);
+      const vRaw = readCornerField(c, V, vL);
+      if (pRaw === null || vRaw === null) {
+        slotB[idx] = undefined;
+        return;
+      }
+      const pr = typeof pRaw === 'number' ? pRaw : slotB[idx]?.price;
+      const vr = typeof vRaw === 'number' ? vRaw : slotB[idx]?.amount;
+      if (pr !== undefined && vr !== undefined && pr > 0 && vr >= 0)
+        slotB[idx] = { price: pr, amount: vr };
+    });
+    if (bidTouched) bids = slotB.filter((s): s is Level => s !== undefined);
 
-      let askTouched = false;
-      const slotA: Array<Level | undefined> = [asks[0], asks[1], asks[2]].map(
-        (r) => (r ? { ...r } : undefined),
-      );
-      ASK_OB_KEYS.forEach(([S, U, pL, vL], idx) => {
-        if (!levelTouched(c, S, U, pL, vL)) return;
-        askTouched = true;
-        const pRaw = readCornerField(c, S, pL);
-        const vRaw = readCornerField(c, U, vL);
-        if (pRaw === null || vRaw === null) {
-          slotA[idx] = undefined;
-          return;
-        }
-        const pr = typeof pRaw === 'number' ? pRaw : slotA[idx]?.price;
-        const vr = typeof vRaw === 'number' ? vRaw : slotA[idx]?.amount;
-        if (pr !== undefined && vr !== undefined && pr > 0 && vr >= 0)
-          slotA[idx] = { price: pr, amount: vr };
-      });
-      if (askTouched)
-        asks = slotA.filter((s): s is Level => s !== undefined);
-    }
-    // Đã có snapshot → bỏ qua ORDERBOOK_DELTA, chờ BOOK_DELTA
+    let askTouched = false;
+    const slotA: Array<Level | undefined> = [asks[0], asks[1], asks[2]].map(
+      (r) => (r ? { ...r } : undefined),
+    );
+    ASK_OB_KEYS.forEach(([S, U, pL, vL], idx) => {
+      if (!levelTouched(c, S, U, pL, vL)) return;
+      askTouched = true;
+      const pRaw = readCornerField(c, S, pL);
+      const vRaw = readCornerField(c, U, vL);
+      if (pRaw === null || vRaw === null) {
+        slotA[idx] = undefined;
+        return;
+      }
+      const pr = typeof pRaw === 'number' ? pRaw : slotA[idx]?.price;
+      const vr = typeof vRaw === 'number' ? vRaw : slotA[idx]?.amount;
+      if (pr !== undefined && vr !== undefined && pr > 0 && vr >= 0)
+        slotA[idx] = { price: pr, amount: vr };
+    });
+    if (askTouched) asks = slotA.filter((s): s is Level => s !== undefined);
   }
 
   let lastPrice = prev?.lastPrice ?? null;

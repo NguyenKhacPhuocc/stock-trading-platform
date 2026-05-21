@@ -1,46 +1,56 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useAppDispatch } from '@/store/hooks';
-import { finishHydratingSession, setSession } from '@/store/slices/auth.slice';
-import { fetchAuthenticatedSession } from '@/lib/fetch-auth-session';
+import { useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { store } from '@/store';
+import { clearUser, finishHydratingSession, setSession } from '@/store/slices/auth.slice';
+import {
+  AUTH_SESSION_QUERY_KEY,
+  AUTH_SESSION_REFRESH_MS,
+  fetchAuthenticatedSession,
+} from '@/lib/fetch-auth-session';
 
-let inflightSessionHydration: ReturnType<
-  typeof fetchAuthenticatedSession
-> | null = null;
 
-async function fetchAuthenticatedSessionOnce() {
-  if (!inflightSessionHydration) {
-    inflightSessionHydration = fetchAuthenticatedSession().finally(() => {
-      inflightSessionHydration = null;
-    });
-  }
-  return inflightSessionHydration;
-}
-
-/**
- * Sau F5: GET /auth/me + GET /users/me/accounts → Redux.
- * 401 = chưa đăng nhập, không báo lỗi.
- */
-export default function AuthSessionProvider({ children }: { children: React.ReactNode }) {
+export default function AuthSessionProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const dispatch = useAppDispatch();
+  const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
+  const isHydratingSession = useAppSelector((s) => s.auth.isHydratingSession);
+  const expiredNotifiedRef = useRef(false);
+
+  const { data, isFetched, isError } = useQuery({
+    queryKey: AUTH_SESSION_QUERY_KEY,
+    queryFn: fetchAuthenticatedSession,
+    staleTime: AUTH_SESSION_REFRESH_MS,
+    refetchInterval: isAuthenticated ? AUTH_SESSION_REFRESH_MS : false,
+    refetchOnWindowFocus: isAuthenticated,
+    refetchIntervalInBackground: false,
+  });
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const session = await fetchAuthenticatedSessionOnce();
-        if (!cancelled && session) dispatch(setSession(session));
-      } catch {
-        // 401 / lỗi mạng: không clearUser — tránh race với login; sau F5 Redux đã null
-      } finally {
-        if (!cancelled) dispatch(finishHydratingSession());
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dispatch]);
+    if (!isHydratingSession) return;
+    if (isFetched || isError) dispatch(finishHydratingSession());
+  }, [isFetched, isError, isHydratingSession, dispatch]);
+
+  useEffect(() => {
+    if (!isFetched) return;
+    if (data) {
+      expiredNotifiedRef.current = false;
+      dispatch(setSession(data));
+      return;
+    }
+    if (!store.getState().auth.isAuthenticated) return;
+    if (!expiredNotifiedRef.current) {
+      expiredNotifiedRef.current = true;
+      toast.error('Phiên đăng nhập đã hết hạn');
+    }
+    dispatch(clearUser());
+  }, [data, isFetched, dispatch]);
 
   return <>{children}</>;
 }

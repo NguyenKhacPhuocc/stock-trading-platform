@@ -1,23 +1,28 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AppGateway } from '../../websocket/app.gateway';
 import {
   WS_TY,
-  compactOrderbookDelta,
-  compactTradeTick,
+  BOARD_DEPTH_PATCH_KEYS,
+  BOARD_PATCH_KEYS,
+  compactSnapshotBoardPatch,
+  diffSnapshotBoardPatch,
+  firstDepthOnlyDelta,
 } from '../../websocket/market-ws-compact';
 import { Stock } from '../../database/entities/stock.entity';
-import { DEFAULT_STOCK_BOARD_ID } from '../../common/const';
-import type { MarketDeltaEnvelope } from './dto/matching.dto';
+import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
+import { Order } from '../../database/entities/order.entity';
+import { DEFAULT_STOCK_BOARD_ID, OrderStatus } from '../../common/const';
+import type { MarketDeltaEnvelope, QueuedOrder } from './dto/matching.dto';
 import { SymbolBook, type PriceLevel } from './util/symbol-book';
 import {
-  BOOK_DEPTH_KEYS,
-  type DepthSnapshot,
   aggregatePriceLevels,
+  bookDepthTotals,
   summarizeBookDepth,
 } from './util/book-depth.util';
 import { ORDERBOOK_CACHE_MAX_LEVELS } from './util/matching.constants';
+import { bookDepthLine, bookOrdersLine } from './util/order-flow-log.util';
 import { BookRegistry } from './book-registry.service';
 import { OrderbookWalService } from './orderbook-wal.service';
 import { OrderbookRedisService } from './orderbook-redis.service';
@@ -29,10 +34,14 @@ type LevelChange = { p: number; v: number };
 export class OrderbookWsService {
   private readonly logger = new Logger(OrderbookWsService.name);
   private seq = 1;
-  private readonly prevBookDepth = new Map<string, DepthSnapshot>();
   private readonly prevBidDepth = new Map<string, Map<number, number>>();
   private readonly prevAskDepth = new Map<string, Map<number, number>>();
   private readonly exchangeCache = new Map<string, string | undefined>();
+  /** Trạng thái bảng giá đã emit — chỉ push field thay đổi. */
+  private readonly prevBoardPatchBySymbol = new Map<
+    string,
+    Record<string, unknown>
+  >();
 
   constructor(
     @Inject(forwardRef(() => AppGateway))
@@ -41,7 +50,55 @@ export class OrderbookWsService {
     private readonly wal: OrderbookWalService,
     private readonly orderbookRedis: OrderbookRedisService,
     @InjectRepository(Stock) private readonly stockRepo: Repository<Stock>,
+    @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
   ) {}
+
+  /**
+   * Chuẩn bị sổ trước khớp: RAM → DB (pending/partial) → WAL replay nếu vẫn rỗng.
+   */
+  async ensureBookReady(
+    sym: string,
+    stockId: string,
+    book: SymbolBook,
+    excludeOrderId?: string,
+  ): Promise<void> {
+    if (book.bidLevels.length > 0 || book.askLevels.length > 0) {
+      if (excludeOrderId) book.removeOrder(excludeOrderId);
+      return;
+    }
+
+    const fromDb = await this.rebuildBookFromOpenOrders(
+      stockId,
+      book,
+      excludeOrderId,
+    );
+    if (fromDb > 0) {
+      this.logger.log(
+        `[order-flow] ensureBook from DB | ${sym} loaded=${fromDb} ${bookOrdersLine(book)}`,
+      );
+      return;
+    }
+
+    const fromWal = await this.wal.replayIntoBook(sym, stockId, book);
+    if (fromWal) {
+      this.logger.log(
+        `[order-flow] ensureBook from WAL | ${sym} ${bookOrdersLine(book)}`,
+      );
+    }
+  }
+
+  /** Sau khớp/hủy: RAM = đúng pending/partial trong DB (tránh bản trùng từ rest). */
+  async syncBookFromDb(
+    sym: string,
+    stockId: string,
+    book: SymbolBook,
+  ): Promise<number> {
+    const n = await this.rebuildBookFromOpenOrders(stockId, book);
+    this.logger.log(
+      `[order-flow] book synced from DB | ${sym} open=${n} ${bookOrdersLine(book)}`,
+    );
+    return n;
+  }
 
   async publishSubscribeBySymbol(rawSymbol: string): Promise<void> {
     const sym = rawSymbol.trim().toUpperCase();
@@ -52,29 +109,21 @@ export class OrderbookWsService {
 
     const ex = await this.exchangeForStock(stock.id);
     const book = this.books.getBook(stock.id);
-    let hasLiveBook = book.bidLevels.length > 0 || book.askLevels.length > 0;
 
-    if (!hasLiveBook) {
-      const recovered = await this.wal.replayIntoBook(sym, stock.id, book);
-      if (recovered) {
-        hasLiveBook = book.bidLevels.length > 0 || book.askLevels.length > 0;
-        this.logger.log(`${sym}: book rebuilt from WAL, gửi OB_SNAPSHOT`);
-      }
-    }
+    const openCount = await this.rebuildBookFromOpenOrders(stock.id, book);
+    await this.wal.persistBook(sym, stock.id, book);
 
-    if (hasLiveBook) {
-      this.emitSnapshotFromBook(sym, book, ex);
+    const isEmpty = book.bidLevels.length === 0 && book.askLevels.length === 0;
+    if (isEmpty) {
+      await this.orderbookRedis.clearSymbol(sym);
     } else {
-      const snapshot = await this.orderbookRedis.readSnapshot(sym);
-      this.logger.log(
-        `${sym}: OB_SNAPSHOT từ Redis bids=${snapshot.bids.length} asks=${snapshot.asks.length}`,
-      );
-      this.initDiffState(sym, snapshot.bids, snapshot.asks);
-      this.gateway.emitInstrumentTick(
-        { ty: 'OB_SNAPSHOT', q: this.nextSeq(), SB: sym, ch: snapshot },
-        ex,
-      );
+      await this.orderbookRedis.syncFromBook(sym, book);
     }
+
+    this.logger.log(
+      `[order-flow] subscribe OB_SNAPSHOT from DB | ${sym} openOrders=${openCount} ${bookDepthLine(book.bidLevels.length, book.askLevels.length)}`,
+    );
+    this.emitSnapshotFromBook(sym, book, ex);
   }
 
   async emitBookUpdate(
@@ -84,72 +133,138 @@ export class OrderbookWsService {
   ): Promise<void> {
     const sym = symbol.toUpperCase();
     const ex = await this.exchangeForStock(stockId);
+    const isEmpty = book.bidLevels.length === 0 && book.askLevels.length === 0;
 
-    await this.orderbookRedis.syncFromBook(sym, book);
-
-    const depth = summarizeBookDepth(book);
-    const obChanges = this.diffBookDepth(sym, depth);
-    if (Object.keys(obChanges).length > 0) {
-      this.gateway.emitInstrumentTick(
-        {
-          ty: WS_TY.ORDERBOOK_DELTA,
-          q: this.nextSeq(),
-          SB: sym,
-          ch: compactOrderbookDelta(obChanges),
-        } as MarketDeltaEnvelope,
-        ex,
-      );
+    if (isEmpty) {
+      this.logger.log(`[order-flow] emit WS OB_SNAPSHOT empty | ${sym}`);
+      this.emitSnapshotFromBook(sym, book, ex);
+    } else {
+      const { b, a } = this.diffFullDepth(sym, book.bidLevels, book.askLevels);
+      if (b.length > 0 || a.length > 0) {
+        this.logger.log(
+          `[order-flow] emit WS BOOK_DELTA | ${sym} bidChg=${b.length} askChg=${a.length}`,
+        );
+        this.gateway.emitInstrumentTick(
+          { ty: 'BOOK_DELTA', q: this.nextSeq(), SB: sym, ch: { b, a } },
+          ex,
+        );
+      } else {
+        this.logger.log(`[order-flow] emit WS OB_SNAPSHOT full | ${sym}`);
+        this.emitSnapshotFromBook(sym, book, ex);
+      }
     }
 
-    const { b, a } = this.diffFullDepth(sym, book.bidLevels, book.askLevels);
-    if (b.length > 0 || a.length > 0) {
-      this.gateway.emitInstrumentTick(
-        { ty: 'BOOK_DELTA', q: this.nextSeq(), SB: sym, ch: { b, a } },
-        ex,
-      );
-    }
+    void this.persistBookSideEffects(sym, stockId, book, isEmpty);
   }
 
-  emitTradeTick(
+  /** TOP3 + TB/TO từ sổ RAM — không query DB (hot path treo/hủy lệnh). */
+  emitBoardDepthFromBook(
     symbol: string,
     stockId: string,
-    price: number,
-    qty: number,
+    book: SymbolBook,
   ): void {
+    const sym = symbol.toUpperCase();
+    const depth = summarizeBookDepth(book);
+    const { totalBid, totalOffer } = bookDepthTotals(book);
+    const next: Record<string, unknown> = {
+      B3: depth.bid3Price ?? 0,
+      V3: depth.bid3Volume ?? 0,
+      B2: depth.bid2Price ?? 0,
+      V2: depth.bid2Volume ?? 0,
+      B1: depth.bid1Price ?? 0,
+      V1: depth.bid1Volume ?? 0,
+      S1: depth.ask1Price ?? 0,
+      U1: depth.ask1Volume ?? 0,
+      S2: depth.ask2Price ?? 0,
+      U2: depth.ask2Volume ?? 0,
+      S3: depth.ask3Price ?? 0,
+      U3: depth.ask3Volume ?? 0,
+      TB: totalBid,
+      TO: totalOffer,
+    };
+    const hadPrev = this.prevBoardPatchBySymbol.has(sym);
+    const prev = this.prevBoardPatchBySymbol.get(sym) ?? {};
+    const ch =
+      !hadPrev && (totalBid > 0 || totalOffer > 0)
+        ? firstDepthOnlyDelta(next)
+        : diffSnapshotBoardPatch(prev, next, BOARD_DEPTH_PATCH_KEYS);
+    this.prevBoardPatchBySymbol.set(sym, { ...prev, ...next });
+    if (Object.keys(ch).length === 0) return;
+
     void this.exchangeForStock(stockId).then((ex) => {
-      this.gateway.emitInstrumentTick(
-        {
-          ty: WS_TY.TRADE_TICK,
-          q: this.nextSeq(),
-          SB: symbol.toUpperCase(),
-          ch: compactTradeTick(price, qty),
-        } as MarketDeltaEnvelope,
-        ex,
+      const envelope = {
+        ty: WS_TY.ORDERBOOK_DELTA,
+        q: this.nextSeq(),
+        SB: sym,
+        ch,
+      } as MarketDeltaEnvelope;
+      this.logger.log(
+        `[order-flow] emit WS BOARD_DELTA (RAM) | ${sym} keys=${Object.keys(ch).join(',')}`,
       );
+      this.gateway.emitInstrumentTick(envelope, ex);
+    });
+  }
+
+  private persistBookSideEffects(
+    sym: string,
+    stockId: string,
+    book: SymbolBook,
+    isEmpty: boolean,
+  ): void {
+    void (async () => {
+      try {
+        if (isEmpty) {
+          this.logger.log(`[order-flow] Redis orderbook cache cleared | ${sym}`);
+          await this.orderbookRedis.clearSymbol(sym);
+        } else {
+          await this.orderbookRedis.syncFromBook(sym, book);
+          this.logger.log(`[order-flow] Redis orderbook cache synced | ${sym}`);
+        }
+        await this.wal.persistBook(sym, stockId, book);
+      } catch (e: unknown) {
+        this.logger.warn(`persistBookSideEffects ${sym}: ${String(e)}`);
+      }
+    })();
+  }
+
+  /**
+   * Push bảng giá `ty=OB`.
+   * @param depthOnly — treo/hủy lệnh: chỉ TOP3 + TB/TO; khớp: thêm CP/CH/TT/...
+   */
+  emitPriceBoardFromSnapshot(
+    symbol: string,
+    stockId: string,
+    snap: StockBoardSnapshot,
+    depthOnly: boolean,
+  ): void {
+    const sym = symbol.toUpperCase();
+    const next = compactSnapshotBoardPatch(snap);
+    const hadPrev = this.prevBoardPatchBySymbol.has(sym);
+    const prev = this.prevBoardPatchBySymbol.get(sym) ?? {};
+    const keys = depthOnly ? BOARD_DEPTH_PATCH_KEYS : BOARD_PATCH_KEYS;
+    const ch =
+      !hadPrev && depthOnly
+        ? firstDepthOnlyDelta(next)
+        : diffSnapshotBoardPatch(prev, next, keys);
+    this.prevBoardPatchBySymbol.set(sym, { ...next });
+    if (Object.keys(ch).length === 0) return;
+
+    void this.exchangeForStock(stockId).then((ex) => {
+      const envelope = {
+        ty: WS_TY.ORDERBOOK_DELTA,
+        q: this.nextSeq(),
+        SB: sym,
+        ch,
+      } as MarketDeltaEnvelope;
+      this.logger.log(
+        `[order-flow] emit WS BOARD_DELTA | ${sym} keys=${Object.keys(ch).join(',')} payload=${JSON.stringify(ch)}`,
+      );
+      this.gateway.emitInstrumentTick(envelope, ex);
     });
   }
 
   private nextSeq(): number {
     return this.seq++;
-  }
-
-  private depthNum(v: unknown): number | undefined {
-    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-  }
-
-  private diffBookDepth(
-    sym: string,
-    next: DepthSnapshot,
-  ): Record<string, unknown> {
-    const prev = this.prevBookDepth.get(sym) ?? {};
-    const changes: Record<string, unknown> = {};
-    for (const pk of BOOK_DEPTH_KEYS) {
-      const a = this.depthNum(prev[pk]);
-      const b = this.depthNum(next[pk]);
-      if (a !== b) changes[pk] = b === undefined ? null : b;
-    }
-    this.prevBookDepth.set(sym, { ...next });
-    return changes;
   }
 
   private diffFullDepth(
@@ -219,6 +334,41 @@ export class OrderbookWsService {
       { ty: 'OB_SNAPSHOT', q: this.nextSeq(), SB: sym, ch: { bids, asks } },
       ex,
     );
+  }
+
+  /** Nguồn sự thật: chỉ lệnh pending/partial trong DB. */
+  private async rebuildBookFromOpenOrders(
+    stockId: string,
+    book: SymbolBook,
+    excludeOrderId?: string,
+  ): Promise<number> {
+    const rows = await this.orderRepo.find({
+      where: {
+        stockId,
+        status: In([OrderStatus.PENDING, OrderStatus.PARTIAL]),
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    book.restore({ bids: [], asks: [] });
+    let count = 0;
+    for (const o of rows) {
+      if (excludeOrderId && o.id === excludeOrderId) continue;
+      const remaining = Number(o.quantity) - Number(o.matchedQty);
+      if (remaining <= 0) continue;
+      const queued: QueuedOrder = {
+        orderId: o.id,
+        tradingAccountId: o.tradingAccountId,
+        stockId: o.stockId,
+        side: o.side,
+        price: Number(o.price ?? 0),
+        remainingQty: remaining,
+        createdAtMs: o.createdAt.getTime(),
+      };
+      book.rest(queued);
+      count++;
+    }
+    return count;
   }
 
   private initDiffState(

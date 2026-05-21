@@ -1,5 +1,9 @@
 import { memo, useEffect, useRef } from 'react';
-import type { PriceTone } from './price-board-utils';
+import {
+  formatInt,
+  formatPrice,
+  type PriceTone,
+} from './price-board-utils';
 
 export type BoardCellTone = PriceTone | 'muted' | 'white';
 
@@ -14,26 +18,53 @@ const toneClass: Record<BoardCellTone, string> = {
 };
 
 export type PriceBoardCellProps = {
-  children: React.ReactNode;
   align?: 'left' | 'right' | 'center';
   tone?: BoardCellTone;
-  /** Giá trị dùng để so sánh trước/sau, đổi thì cell sẽ flash. */
   rawValue?: number | string;
+  /** Cách format số hiển thị — không truyền children để memo có hiệu lực. */
+  format?: 'price' | 'int' | 'pct' | 'text';
   flashStyle?: 'delta' | 'neutral';
   className?: string;
 };
 
+function formatDisplay(
+  rawValue: number | string | undefined,
+  format: PriceBoardCellProps['format'],
+): string {
+  if (rawValue === undefined) return '';
+  if (format === 'text') return String(rawValue);
+  if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) return '';
+  if (format === 'int') return rawValue > 0 ? formatInt(rawValue) : '';
+  if (format === 'pct') {
+    if (rawValue === 0) return '';
+    return `${rawValue >= 0 ? '+' : ''}${rawValue.toFixed(2)}%`;
+  }
+  return rawValue > 0 ? formatPrice(rawValue) : '';
+}
+
+function cellPropsEqual(prev: PriceBoardCellProps, next: PriceBoardCellProps): boolean {
+  return (
+    prev.align === next.align &&
+    prev.tone === next.tone &&
+    prev.rawValue === next.rawValue &&
+    prev.format === next.format &&
+    prev.flashStyle === next.flashStyle &&
+    prev.className === next.className
+  );
+}
+
 export const PriceBoardCell = memo(function PriceBoardCell({
-  children,
   align = 'right',
   tone,
   rawValue,
+  format = 'price',
   flashStyle = 'delta',
   className = '',
 }: PriceBoardCellProps) {
   const cellRef = useRef<HTMLDivElement | null>(null);
   const prevValueRef = useRef<number | string | undefined>(rawValue);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const display = formatDisplay(rawValue, format);
 
   useEffect(() => {
     const node = cellRef.current;
@@ -46,7 +77,6 @@ export const PriceBoardCell = memo(function PriceBoardCell({
     }
     if (rawValue === undefined || rawValue === prev) return;
 
-    // Flash theo biến động trước/sau của chính cell.
     const nextFlashClass =
       flashStyle === 'neutral'
         ? 'price-board-flash-neutral'
@@ -56,7 +86,6 @@ export const PriceBoardCell = memo(function PriceBoardCell({
             : 'price-board-flash-down'
           : 'price-board-flash-up';
 
-    // Update liên tục vẫn restart được flash + timer chuẩn.
     if (timerRef.current) clearTimeout(timerRef.current);
     node.classList.remove(
       'price-board-flash-up',
@@ -64,7 +93,7 @@ export const PriceBoardCell = memo(function PriceBoardCell({
       'price-board-flash-neutral',
       'price-board-flash-text',
     );
-    void node.offsetWidth; // force reflow để animation restart
+    void node.offsetWidth;
     node.classList.add(nextFlashClass, 'price-board-flash-text');
     timerRef.current = setTimeout(() => {
       node.classList.remove(
@@ -97,7 +126,7 @@ export const PriceBoardCell = memo(function PriceBoardCell({
       ref={cellRef}
       className={`flex h-7 min-h-7 items-center border-r border-b border-border/80 bg-background px-1 py-0.5 text-[12px] tabular-nums group-hover/row:bg-border last:border-r-0 ${alignCls} ${toneCls} ${className}`.trim()}
     >
-      {children}
+      {display}
     </div>
   );
-});
+}, cellPropsEqual);

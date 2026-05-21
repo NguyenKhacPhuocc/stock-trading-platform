@@ -128,19 +128,27 @@ export function compactDeltaToPriceBoardPatch(ch: Record<string, unknown>): Part
   }
   const lastP = coalesce<unknown>('CP', 'lastPrice', ch);
   const matchedV = coalesce<unknown>('CV', 'matchedVolume', ch);
-  const changePct = ch.changePercent;
-  if (lastP != null || matchedV != null || changePct != null) {
+  const priceCh = coalesce<unknown>('CH', 'priceChange', ch);
+  const priceChPct = coalesce<unknown>('CHP', 'priceChangePercent', ch);
+  if (
+    lastP != null ||
+    matchedV != null ||
+    priceCh != null ||
+    priceChPct != null
+  ) {
     patch.match = {
       ...(lastP != null ? { p: Number(lastP) } : {}),
       ...(matchedV != null ? { v: Number(matchedV) } : {}),
-      ...(changePct != null
-        ? {
-            priceChange: Number(changePct),
-            priceChangePercent: Number(changePct),
-          }
-        : {}),
+      ...(priceCh != null ? { priceChange: Number(priceCh) } : {}),
+      ...(priceChPct != null ? { priceChangePercent: Number(priceChPct) } : {}),
     } as PriceBoardRow['match'];
   }
+  const totalVol = coalesce<unknown>('TT', 'totalTrading', ch);
+  if (totalVol != null) patch.totalVol = Number(totalVol);
+  const hi = coalesce<unknown>('HI', 'high', ch);
+  if (hi != null) patch.high = Number(hi);
+  const lo = coalesce<unknown>('LO', 'low', ch);
+  if (lo != null) patch.low = Number(lo);
   return patch;
 }
 

@@ -132,13 +132,13 @@ export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartP
   };
 
   const tabBtn =
-    'rounded px-2 py-1 text-[10px] font-medium transition-colors outline-none focus-visible:ring-1 focus-visible:ring-border';
+    'rounded px-2 py-1 text-[11px] font-medium transition-colors outline-none focus-visible:ring-1 focus-visible:ring-border';
   const tabActive = 'bg-surface-2 text-foreground ring-1 ring-border/80';
   const tabIdle = 'text-muted hover:bg-white/[0.04] hover:text-foreground';
 
   return (
     <section className={`${panelCardClassName} min-h-[260px] overflow-hidden`}>
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between border-b border-border px-2 py-1">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -155,7 +155,7 @@ export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartP
             Bảng giá
           </button>
         </div>
-        <div className="text-xs text-muted">{symbolLabel || '---'}</div>
+        <div className="text-[12px] text-muted font-semibold bg-primary-dark px-2 py-[2px]  rounded text-white">{symbolLabel || '---'}</div>
       </div>
       {tab === 'chart' ? (
         <div className="flex h-[calc(100%-37px)] items-center justify-center bg-black text-xs text-muted">

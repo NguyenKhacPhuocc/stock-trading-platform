@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
@@ -9,14 +9,18 @@ import { OrderStatus, OrderSide, TransactionType } from '../../common/const';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
 import type { TradeFillPlan } from './dto/matching.dto';
 import type { OrderFillNotify } from './dto/order-fill-notify.dto';
+import { orderRef } from './util/order-flow-log.util';
 
 /** Ghi khớp lệnh: orders, trades, ví, position. */
 @Injectable()
 export class TradeFillService {
+  private readonly logger = new Logger(TradeFillService.name);
+
   constructor(private readonly dataSource: DataSource) {}
 
   async applyFills(
     fills: TradeFillPlan[],
+    symbol?: string,
   ): Promise<{ lastTradePrice: number | null; notifies: OrderFillNotify[] }> {
     if (fills.length === 0) return { lastTradePrice: null, notifies: [] };
 
@@ -25,7 +29,13 @@ export class TradeFillService {
     const seenOrderIds = new Set<string>();
     await this.dataSource.transaction(async (manager) => {
       for (const fill of fills) {
-        lastPx = await this.applyOneFill(manager, fill, notifies, seenOrderIds);
+        lastPx = await this.applyOneFill(
+          manager,
+          fill,
+          notifies,
+          seenOrderIds,
+          symbol,
+        );
       }
     });
     return { lastTradePrice: lastPx, notifies };
@@ -36,6 +46,7 @@ export class TradeFillService {
     fill: TradeFillPlan,
     notifies: OrderFillNotify[],
     seenOrderIds: Set<string>,
+    symbol?: string,
   ): Promise<number> {
     const buyOrder = await manager.findOne(Order, {
       where: { id: fill.buyOrderId },
@@ -76,14 +87,25 @@ export class TradeFillService {
 
     await manager.save(Order, [buyOrder, sellOrder]);
 
-    await manager.save(
+    this.logger.log(
+      `[order-flow] order status DB | buy ${orderRef(buyOrder.id, buyOrder.orderCode)} → ${buyOrder.status} matched=${buyOrder.matchedQty}/${buyOrder.quantity}${symbol ? ` ${symbol}` : ''}`,
+    );
+    this.logger.log(
+      `[order-flow] order status DB | sell ${orderRef(sellOrder.id, sellOrder.orderCode)} → ${sellOrder.status} matched=${sellOrder.matchedQty}/${sellOrder.quantity}`,
+    );
+
+    const tradeRow = await manager.save(
       manager.create(Trade, {
         buyOrderId: buyOrder.id,
         sellOrderId: sellOrder.id,
         price: px,
         quantity: mq,
         tradeValue,
+        stockId: buyOrder.stockId,
       }),
+    );
+    this.logger.log(
+      `[order-flow] DB save | table=trades id=${tradeRow.id} buyOrder=${orderRef(buyOrder.id, buyOrder.orderCode)} sellOrder=${orderRef(sellOrder.id, sellOrder.orderCode)} price=${px} qty=${mq} tradeValue=${tradeValue}${symbol ? ` ${symbol}` : ''}`,
     );
 
     const limitBuy = Number(buyOrder.price ?? 0);
@@ -108,12 +130,18 @@ export class TradeFillService {
     buyerWallet.availableBalance =
       Number(buyerWallet.availableBalance) + (limitBuy - px) * mq;
     await manager.save(Wallet, buyerWallet);
+    this.logger.log(
+      `[order-flow] DB save | table=wallets id=${buyerWallet.id} role=buyer avail=${buyerWallet.availableBalance} locked=${buyerWallet.lockedBalance}`,
+    );
 
     sellerWallet.availableBalance =
       Number(sellerWallet.availableBalance) + tradeValue;
     await manager.save(Wallet, sellerWallet);
+    this.logger.log(
+      `[order-flow] DB save | table=wallets id=${sellerWallet.id} role=seller avail=${sellerWallet.availableBalance} locked=${sellerWallet.lockedBalance}`,
+    );
 
-    await manager.save(
+    const buyCashTx = await manager.save(
       manager.create(CashTransaction, {
         walletId: buyerWallet.id,
         type: TransactionType.BUY_MATCHED,
@@ -125,7 +153,7 @@ export class TradeFillService {
         description: `Khớp mua ${mq} @ ${px}`,
       }),
     );
-    await manager.save(
+    const sellCashTx = await manager.save(
       manager.create(CashTransaction, {
         walletId: sellerWallet.id,
         type: TransactionType.SELL_MATCHED,
@@ -136,6 +164,9 @@ export class TradeFillService {
         refOrderId: sellOrder.id,
         description: `Khớp bán ${mq} @ ${px}`,
       }),
+    );
+    this.logger.log(
+      `[order-flow] DB save | table=cash_transactions buyerTx=${buyCashTx.id} amount=${buyCashTx.amount} sellerTx=${sellCashTx.id} amount=${sellCashTx.amount}`,
     );
 
     const buyerPos = await manager.findOne(Position, {
@@ -162,6 +193,9 @@ export class TradeFillService {
       Number(sellerPos.lockedQuantity) - mq,
     );
     await manager.save(Position, sellerPos);
+    this.logger.log(
+      `[order-flow] DB save | table=positions id=${sellerPos.id} role=seller qty=${sellerPos.quantity} lockedQty=${sellerPos.lockedQuantity}`,
+    );
 
     const oldQty = buyerPos ? Number(buyerPos.quantity) : 0;
     const oldAvg = buyerPos ? Number(buyerPos.avgPrice) : 0;
@@ -177,8 +211,11 @@ export class TradeFillService {
       buyerPos.quantity = newQty;
       buyerPos.avgPrice = newAvg;
       await manager.save(Position, buyerPos);
+      this.logger.log(
+        `[order-flow] DB save | table=positions id=${buyerPos.id} role=buyer qty=${buyerPos.quantity} avgPrice=${buyerPos.avgPrice}`,
+      );
     } else {
-      await manager.save(
+      const newPos = await manager.save(
         manager.create(Position, {
           tradingAccountId: buyOrder.tradingAccountId,
           stockId: buyOrder.stockId,
@@ -186,6 +223,9 @@ export class TradeFillService {
           lockedQuantity: 0,
           avgPrice: px,
         }),
+      );
+      this.logger.log(
+        `[order-flow] DB save | table=positions id=${newPos.id} role=buyer qty=${newPos.quantity} avgPrice=${newPos.avgPrice} (new)`,
       );
     }
 

@@ -235,6 +235,49 @@ audit_logs — ghi nhận thay đổi quan trọng (actor_user_id, action, entit
 ### 6.3 Truy vấn, thủ tục và tính nhất quán dữ liệu
 
 - **Ưu tiên đồ án:** Logic đặt lệnh, khớp, cập nhật số dư nằm trong **NestJS (transaction TypeORM)** để dễ test và debug.
+
+#### 6.3.1 Luồng đặt lệnh và khớp lệnh (tóm tắt)
+
+**Phân biệt:** *Danh sách lệnh* (tab dưới) = mọi trạng thái từ DB. *Sổ lệnh* (orderbook UI) = chỉ lệnh **pending/partial** đang chờ khớp trên engine — lệnh **filled** không hiển thị trên sổ.
+
+```text
+[FE] POST /trade/api/gateway/orders
+  → [BFF] POST /api/orders
+      → OrdersService.createOrder (1 transaction PostgreSQL)
+          • Mua: available_balance −= khóa, locked_balance += khóa
+          • Bán: position.quantity −= KL, locked_quantity += KL
+          • INSERT orders (pending)
+      → MatchingService.enqueueAccepted → BullMQ job "accepted"
+
+[Worker] runAccepted (xếp hàng theo stockId)
+  → ensureBookReady: RAM rỗng → nạp pending/partial từ DB (sau restart)
+  → SymbolBook.matchIncoming (RAM, price-time, không quét DB tìm cặp)
+      • Khớp nhiều lệnh đối ứng → mảng TradeFillPlan (A↔B, A↔C, …)
+      • Hết KL đối ứng → gỡ khỏi sổ; phần dư → book.rest + WAL REST
+  → TradeFillService.applyFills (1 transaction)
+      • trades, orders.matched_qty/status, ví, position, cash_transactions
+  → WAL REMOVE / persist snapshot; Redis depth; WS
+      • book:updated → OB_SNAPSHOT hoặc BOOK_DELTA
+      • order:matched → room user (reload danh sách lệnh)
+
+[FE] subscribe:i + SB=VCB
+  → publishSubscribeBySymbol: rebuild sổ chỉ từ DB (pending/partial)
+  → OB_SNAPSHOT → merge vào useOrderBookRealtime
+```
+
+| Lớp | Vai trò |
+|-----|--------|
+| **PostgreSQL** | Lệnh, khớp, ví, position — nguồn sự thật nghiệp vụ |
+| **SymbolBook (RAM)** | Engine khớp; lệnh filled không còn trên sổ |
+| **WAL Redis** (`wal:snapshot:*`, `wal:book:*`) | Phục hồi sau restart; luôn persist kể cả sổ rỗng |
+| **Redis** `orderbook:{SYM}:buy/sell` | Cache depth WS; xóa khi sổ rỗng |
+
+**Hủy lệnh:** `cancelOrder` (mở khóa tiền/CP) → `enqueueCancelled` → gỡ khỏi RAM + WAL REMOVE + WS.
+
+**Code:** `backend/src/modules/orders/orders.service.ts`, `backend/src/modules/matching/*`.
+
+**Debug log:** grep `[order-flow]` trên console backend khi test 2 user — ví dụ:
+`create order SELL 100 VCB @ 61000` → `added to queue accepted` → `worker start matching` → `matched` → `order removed from book RAM` → `emit WS OB_SNAPSHOT empty`.
 - **PostgreSQL bổ sung (tùy chọn, có giá trị trong báo cáo đồ án):**
   - **VIEW:** ví dụ `v_daily_trade_stats` (tổng KL, giá trị theo `symbol` + ngày).
   - **FUNCTION:** tính toán read-only (tránh trùng code giữa API và báo cáo admin).

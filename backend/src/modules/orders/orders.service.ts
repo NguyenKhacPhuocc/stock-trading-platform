@@ -20,9 +20,17 @@ import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { MatchingService } from '../matching/matching.service';
+import {
+  formatCreateOrder,
+  orderRef,
+} from '../matching/util/order-flow-log.util';
 import { BusinessException } from '../../common/errors/business.exception';
 import type { AppErrorKey } from '../../common/errors/error-const';
 
+/**
+ * Đặt / hủy lệnh — ghi DB + khóa tài sản, rồi đẩy job khớp.
+ * Luồng đầy đủ: DO-AN-SAN-CHUNG-KHOAN-TECH-SPEC.md §6.3.1
+ */
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -70,6 +78,11 @@ export class OrdersService {
       this.throwBusinessError('STOCK_NOT_FOUND');
     }
     await this.checkAmplitude(stock.id, dto.price);
+
+    const sym = stock.symbol.toUpperCase();
+    this.logger.log(
+      `[order-flow] ${formatCreateOrder(dto.side, dto.quantity, sym, dto.price)} | account=${account.accountId}`,
+    );
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const orderCode = this.buildOrderCode();
@@ -145,10 +158,13 @@ export class OrdersService {
           });
           return manager.save(order);
         });
-        void this.matching
-          .enqueueAccepted(saved.id, saved.stockId)
+        this.logger.log(
+          `[order-flow] order saved DB | ${orderRef(saved.id, saved.orderCode)} status=${saved.status}`,
+        );
+        await this.matching
+          .enqueueAccepted(saved.id, saved.stockId, saved.orderCode, sym)
           .catch((e: unknown) =>
-            this.logger.error(`enqueueAccepted: ${String(e)}`),
+            this.logger.error(`[order-flow] enqueue failed: ${String(e)}`),
           );
         return saved;
       } catch (e: unknown) {
@@ -258,10 +274,14 @@ export class OrdersService {
       out.stock = stock;
       return out;
     });
-    void this.matching
-      .enqueueCancelled(saved.id, saved.stockId, saved.stock.symbol)
+    const sym = saved.stock.symbol.toUpperCase();
+    this.logger.log(
+      `[order-flow] cancel order | ${orderRef(saved.id, saved.orderCode)} ${sym}`,
+    );
+    await this.matching
+      .enqueueCancelled(saved.id, saved.stockId, sym, saved.orderCode)
       .catch((e: unknown) =>
-        this.logger.error(`enqueueCancelled: ${String(e)}`),
+        this.logger.error(`[order-flow] enqueue cancel failed: ${String(e)}`),
       );
     return saved;
   }

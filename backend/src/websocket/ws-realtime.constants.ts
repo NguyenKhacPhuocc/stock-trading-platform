@@ -5,11 +5,13 @@ import { Exchange } from '../common/const/market';
  * - i   = instrument (mã CK)
  * - idx = index chỉ số (sau này)
  * - e   = exchange (tổng hợp theo sàn)
+ * - ot  = order trade (lịch sử khớp lệnh / trade tick)
  */
 export const WS_EVT = {
   INSTRUMENT: 'i',
   INDEX: 'idx',
   EXCHANGE: 'e',
+  ORDER_TRADE: 'ot',
 } as const;
 
 const EX_SET = new Set<string>(Object.values(Exchange));
@@ -22,6 +24,11 @@ export function wsRoomInstrument(symbolUpper: string): string {
 /** `room:e:<EX>` — HOSE | HNX | UPCOM (tab bảng giá theo sàn). */
 export function wsRoomExchange(exchangeUpper: string): string {
   return `room:e:${exchangeUpper}`;
+}
+
+/** `room:ot:<STOCK_ID>` — lịch sử khớp lệnh theo stock (realtime tick). */
+export function wsRoomOrderTrade(stockId: string): string {
+  return `room:ot:${stockId}`;
 }
 
 /** Room chỉ số (dự phòng). */

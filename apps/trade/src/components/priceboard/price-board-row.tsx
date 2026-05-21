@@ -1,9 +1,15 @@
 import { memo } from 'react';
 import { PinIcon } from 'lucide-react';
-import type { PriceBoardRow as PriceBoardRowData } from './price-board-types';
-import { useAppSelector } from '@/store/hooks';
+import { useSelector, shallowEqual } from 'react-redux';
+import type { RootState } from '@/store/index';
 import { PriceBoardCell } from './price-board-cell';
-import { chgTone, formatInt, formatPrice, priceBoardGridStyle, toneFromPrice, type PriceTone } from './price-board-utils';
+import { usePriceBoardHighlighted } from './price-board-highlight-context';
+import {
+  chgTone,
+  priceBoardGridStyle,
+  toneFromPrice,
+  type PriceTone,
+} from './price-board-utils';
 
 function toneTextClass(t: PriceTone): string {
   switch (t) {
@@ -20,19 +26,188 @@ function toneTextClass(t: PriceTone): string {
   }
 }
 
+type CornerKey = 'bid3' | 'bid2' | 'bid1' | 'ask1' | 'ask2' | 'ask3';
+
+function selectCorner(symbol: string, key: CornerKey) {
+  return (s: RootState) => s.market.entities[symbol]?.[key];
+}
+
+function selectMatch(symbol: string) {
+  return (s: RootState) => s.market.entities[symbol]?.match;
+}
+
+function selectRefBand(symbol: string) {
+  return (s: RootState) => {
+    const r = s.market.entities[symbol];
+    if (!r) return null;
+    return { ref: r.ref, ceil: r.ceil, floor: r.floor };
+  };
+}
+
+function selectMeta(symbol: string) {
+  return (s: RootState) => {
+    const r = s.market.entities[symbol];
+    if (!r) return null;
+    return { symbol: r.symbol, exchange: r.exchange };
+  };
+}
+
+function selectSession(symbol: string) {
+  return (s: RootState) => {
+    const r = s.market.entities[symbol];
+    if (!r) return null;
+    return { totalVol: r.totalVol, high: r.high, low: r.low, matchP: r.match.p };
+  };
+}
+
+function CornerCells({
+  symbol,
+  side,
+}: {
+  symbol: string;
+  side: 'bid' | 'ask';
+}) {
+  const keys: CornerKey[] =
+    side === 'bid' ? ['bid3', 'bid2', 'bid1'] : ['ask1', 'ask2', 'ask3'];
+
+  return (
+    <>
+      {keys.map((key) => (
+        <CornerCell key={key} symbol={symbol} cornerKey={key} />
+      ))}
+    </>
+  );
+}
+
+function CornerCell({
+  symbol,
+  cornerKey,
+}: {
+  symbol: string;
+  cornerKey: CornerKey;
+}) {
+  const band = useSelector(selectRefBand(symbol), shallowEqual);
+  const corner = useSelector(selectCorner(symbol, cornerKey), shallowEqual);
+  const refPx = band?.ref ?? 0;
+  const ceil = band?.ceil ?? 0;
+  const floor = band?.floor ?? 0;
+  const p = corner?.p ?? 0;
+  const v = corner?.v ?? 0;
+  const tone = toneFromPrice(p, refPx, ceil, floor);
+  return (
+    <>
+      <PriceBoardCell tone={tone} rawValue={p} format="price" />
+      <PriceBoardCell tone={tone} rawValue={v} format="int" />
+    </>
+  );
+}
+
+function SymbolCell({
+  symbol,
+  isPinned,
+  onTogglePin,
+}: {
+  symbol: string;
+  isPinned: boolean;
+  onTogglePin: (symbol: string) => void;
+}) {
+  const meta = useSelector(selectMeta(symbol), shallowEqual);
+  const band = useSelector(selectRefBand(symbol), shallowEqual);
+  const match = useSelector(selectMatch(symbol), shallowEqual);
+
+  if (!meta || !band) {
+    return (
+      <div className="sticky left-0 z-10 flex h-7 min-h-7 items-center border-r border-b border-border/80 bg-background px-1 py-0.5" />
+    );
+  }
+
+  const matchP = match?.p ?? 0;
+  const symTone =
+    matchP > 0
+      ? toneFromPrice(matchP, band.ref, band.ceil, band.floor)
+      : 'ref';
+
+  return (
+    <div className="sticky left-0 z-10 flex h-7 min-h-7 items-center justify-start border-r border-b border-border/80 bg-background px-1 py-0.5 text-left text-[12px] group-hover/row:bg-border">
+      <span className="flex items-center gap-1">
+        <PinIcon
+          className={`h-4 w-4 shrink-0 cursor-pointer text-muted ${isPinned ? 'rotate-45 text-price-down' : ''}`}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onTogglePin(symbol);
+          }}
+          aria-label="Ghim mã — double click"
+        />
+        <span className={`${toneTextClass(symTone)} font-medium`}>{meta.symbol}</span>
+        <span className="text-[10px] text-muted">{meta.exchange}</span>
+      </span>
+    </div>
+  );
+}
+
+function MatchCells({ symbol }: { symbol: string }) {
+  const band = useSelector(selectRefBand(symbol), shallowEqual);
+  const match = useSelector(selectMatch(symbol), shallowEqual);
+  const ref = band?.ref ?? 0;
+  const ceil = band?.ceil ?? 0;
+  const floor = band?.floor ?? 0;
+  const p = match?.p ?? 0;
+  const v = match?.v ?? 0;
+  const priceChange = match?.priceChange ?? 0;
+  const priceChangePercent = match?.priceChangePercent ?? 0;
+  const matchTone = toneFromPrice(p, ref, ceil, floor);
+  return (
+    <>
+      <PriceBoardCell tone={matchTone} rawValue={p} format="price" />
+      <PriceBoardCell tone={matchTone} rawValue={v} format="int" />
+      <PriceBoardCell tone={chgTone(priceChange)} rawValue={priceChange} format="price" />
+      <PriceBoardCell
+        tone={chgTone(priceChangePercent)}
+        rawValue={priceChangePercent}
+        format="pct"
+      />
+    </>
+  );
+}
+
+function SessionCells({ symbol }: { symbol: string }) {
+  const band = useSelector(selectRefBand(symbol), shallowEqual);
+  const session = useSelector(selectSession(symbol), shallowEqual);
+  const ref = band?.ref ?? 0;
+  const ceil = band?.ceil ?? 0;
+  const floor = band?.floor ?? 0;
+  const high = session?.high ?? 0;
+  const low = session?.low ?? 0;
+  const matchP = session?.matchP ?? 0;
+  const avg = (high + low + matchP) / 3;
+  return (
+    <>
+      <PriceBoardCell tone="white" rawValue={session?.totalVol ?? 0} format="int" flashStyle="neutral" />
+      <PriceBoardCell tone={toneFromPrice(high, ref, ceil, floor)} rawValue={high} format="price" />
+      <PriceBoardCell tone={toneFromPrice(avg, ref, ceil, floor)} rawValue={avg} format="price" />
+      <PriceBoardCell tone={toneFromPrice(low, ref, ceil, floor)} rawValue={low} format="price" />
+    </>
+  );
+}
+
 export type PriceBoardRowProps = {
   symbol: string;
   isPinned: boolean;
-  isHighlighted?: boolean;
   onTogglePin: (symbol: string) => void;
   showPinnedBandBottom?: boolean;
 };
 
 export const PriceBoardRow = memo(
-  function PriceBoardRowView({ symbol, isPinned, isHighlighted = false, onTogglePin, showPinnedBandBottom }: PriceBoardRowProps) {
-    const r: PriceBoardRowData | undefined = useAppSelector((s) => s.market.entities[symbol]);
+  function PriceBoardRowView({
+    symbol,
+    isPinned,
+    onTogglePin,
+    showPinnedBandBottom,
+  }: PriceBoardRowProps) {
+    const band = useSelector(selectRefBand(symbol), shallowEqual);
+    const isHighlighted = usePriceBoardHighlighted(symbol);
 
-    if (!r) {
+    if (!band) {
       return (
         <div
           className={`group/row grid ${showPinnedBandBottom ? 'border-b-2 border-board-pin-band' : ''} ${isHighlighted ? 'price-row-highlight' : ''}`}
@@ -41,85 +216,27 @@ export const PriceBoardRow = memo(
       );
     }
 
-    const ref = r.ref;
-    const ceil = r.ceil;
-    const floor = r.floor;
-    const symTone = toneFromPrice(r.match.p, ref, ceil, floor);
-    const bid3Tone = toneFromPrice(r.bid3.p, ref, ceil, floor);
-    const bid2Tone = toneFromPrice(r.bid2.p, ref, ceil, floor);
-    const bid1Tone = toneFromPrice(r.bid1.p, ref, ceil, floor);
-    const matchTone = toneFromPrice(r.match.p, ref, ceil, floor);
-    const ask1Tone = toneFromPrice(r.ask1.p, ref, ceil, floor);
-    const ask2Tone = toneFromPrice(r.ask2.p, ref, ceil, floor);
-    const ask3Tone = toneFromPrice(r.ask3.p, ref, ceil, floor);
-    const avg = (r.high + r.low + r.match.p) / 3;
-    const highTone = toneFromPrice(r.high, ref, ceil, floor);
-    const avgTone = toneFromPrice(avg, ref, ceil, floor);
-    const lowTone = toneFromPrice(r.low, ref, ceil, floor);
-    const priceOrEmpty = (value: number) => (value > 0 ? formatPrice(value) : '');
-    const intOrEmpty = (value: number) => (value > 0 ? formatInt(value) : '');
-
     return (
       <div
         className={`group/row grid ${showPinnedBandBottom ? 'border-b-2 border-board-pin-band' : ''} ${isHighlighted ? 'price-row-highlight' : ''}`}
         style={priceBoardGridStyle}
       >
-        <PriceBoardCell
-          align="left"
-          className="sticky left-0 z-10 bg-background"
-        >
-          <span className="flex items-center gap-1">
-            <PinIcon
-              className={`h-4 w-4 shrink-0 cursor-pointer text-muted ${isPinned ? 'rotate-45 text-price-down' : ''}`}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                onTogglePin(symbol);
-              }}
-              aria-label="Ghim mã — double click"
-            />
-            <span className={toneTextClass(symTone) + " font-medium"}>{r.symbol}</span>
-            <span className="text-[10px] text-muted">{r.exchange}</span>
-          </span>
-        </PriceBoardCell>
-        <PriceBoardCell tone="ref" rawValue={r.ref}>{formatPrice(r.ref)}</PriceBoardCell>
-        <PriceBoardCell tone="ceil" rawValue={r.ceil}>{formatPrice(r.ceil)}</PriceBoardCell>
-        <PriceBoardCell tone="floor" rawValue={r.floor}>{formatPrice(r.floor)}</PriceBoardCell>
-        <PriceBoardCell tone={bid3Tone} rawValue={r.bid3.p}>{priceOrEmpty(r.bid3.p)}</PriceBoardCell>
-        <PriceBoardCell tone={bid3Tone} rawValue={r.bid3.v}>{intOrEmpty(r.bid3.v)}</PriceBoardCell>
-        <PriceBoardCell tone={bid2Tone} rawValue={r.bid2.p}>{priceOrEmpty(r.bid2.p)}</PriceBoardCell>
-        <PriceBoardCell tone={bid2Tone} rawValue={r.bid2.v}>{intOrEmpty(r.bid2.v)}</PriceBoardCell>
-        <PriceBoardCell tone={bid1Tone} rawValue={r.bid1.p}>{priceOrEmpty(r.bid1.p)}</PriceBoardCell>
-        <PriceBoardCell tone={bid1Tone} rawValue={r.bid1.v}>{intOrEmpty(r.bid1.v)}</PriceBoardCell>
-        <PriceBoardCell tone={matchTone} rawValue={r.match.p}>
-          {priceOrEmpty(r.match.p)}
-        </PriceBoardCell>
-        <PriceBoardCell tone={matchTone} rawValue={r.match.v}>{intOrEmpty(r.match.v)}</PriceBoardCell>
-        <PriceBoardCell tone={chgTone(r.match.priceChange)} rawValue={r.match.priceChange}>
-          {r.match.priceChange === 0 ? '' : formatPrice(r.match.priceChange)}
-        </PriceBoardCell>
-        <PriceBoardCell tone={chgTone(r.match.priceChangePercent)} rawValue={r.match.priceChangePercent}>
-          {r.match.priceChangePercent === 0 ? '' : `${r.match.priceChangePercent >= 0 ? '+' : ''}${r.match.priceChangePercent.toFixed(2)}%`}
-        </PriceBoardCell>
-        <PriceBoardCell tone={ask1Tone} rawValue={r.ask1.p}>{priceOrEmpty(r.ask1.p)}</PriceBoardCell>
-        <PriceBoardCell tone={ask1Tone} rawValue={r.ask1.v}>{intOrEmpty(r.ask1.v)}</PriceBoardCell>
-        <PriceBoardCell tone={ask2Tone} rawValue={r.ask2.p}>{priceOrEmpty(r.ask2.p)}</PriceBoardCell>
-        <PriceBoardCell tone={ask2Tone} rawValue={r.ask2.v}>{intOrEmpty(r.ask2.v)}</PriceBoardCell>
-        <PriceBoardCell tone={ask3Tone} rawValue={r.ask3.p}>{priceOrEmpty(r.ask3.p)}</PriceBoardCell>
-        <PriceBoardCell tone={ask3Tone} rawValue={r.ask3.v}>{intOrEmpty(r.ask3.v)}</PriceBoardCell>
-        <PriceBoardCell tone="white" rawValue={r.totalVol} flashStyle="neutral">
-          {intOrEmpty(r.totalVol)}
-        </PriceBoardCell>
-        <PriceBoardCell tone={highTone} rawValue={r.high}>{priceOrEmpty(r.high)}</PriceBoardCell>
-        <PriceBoardCell tone={avgTone} rawValue={avg}>{priceOrEmpty(avg)}</PriceBoardCell>
-        <PriceBoardCell tone={lowTone} rawValue={r.low}>{priceOrEmpty(r.low)}</PriceBoardCell>
+        <SymbolCell symbol={symbol} isPinned={isPinned} onTogglePin={onTogglePin} />
+        <PriceBoardCell tone="ref" rawValue={band.ref} format="price" />
+        <PriceBoardCell tone="ceil" rawValue={band.ceil} format="price" />
+        <PriceBoardCell tone="floor" rawValue={band.floor} format="price" />
+        <CornerCells symbol={symbol} side="bid" />
+        <MatchCells symbol={symbol} />
+        <CornerCells symbol={symbol} side="ask" />
+        <SessionCells symbol={symbol} />
       </div>
     );
   },
   (prev, next) =>
     prev.symbol === next.symbol &&
     prev.isPinned === next.isPinned &&
-    prev.isHighlighted === next.isHighlighted &&
-    prev.showPinnedBandBottom === next.showPinnedBandBottom
+    prev.showPinnedBandBottom === next.showPinnedBandBottom &&
+    prev.onTogglePin === next.onTogglePin,
 );
 
 PriceBoardRow.displayName = 'PriceBoardRow';

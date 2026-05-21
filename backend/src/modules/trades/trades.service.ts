@@ -18,6 +18,15 @@ export class TradesService {
       .getMany();
   }
 
+  getTradesByStockId(stockId: string, limit = 20) {
+    return this.tradeRepo
+      .createQueryBuilder('trade')
+      .where('trade.stockId = :stockId', { stockId })
+      .orderBy('trade.createdAt', 'DESC')
+      .take(limit)
+      .getMany();
+  }
+
   getUserTrades(userId: string) {
     return this.tradeRepo
       .createQueryBuilder('trade')

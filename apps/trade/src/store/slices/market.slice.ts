@@ -2,6 +2,7 @@ import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/tool
 import type { MarketBoardGatewayD } from '@stock/types';
 import { parseApiEnvelopeJson } from '@stock/utils';
 import type { ExchangeCode, PriceBoardRow } from '@/components/priceboard/price-board-types';
+import { applyPriceBoardPatch } from '@/lib/market-patch-merge';
 import { gatewayMarketBoardPath } from '@/lib/gateway-paths';
 
 export type MarketInstrumentApi = {
@@ -188,19 +189,8 @@ const marketSlice = createSlice({
           continue;
         }
 
-        const next: PriceBoardRow = {
-          ...current,
-          ...patch,
-          bid3: patch.bid3 ? { ...current.bid3, ...patch.bid3 } : current.bid3,
-          bid2: patch.bid2 ? { ...current.bid2, ...patch.bid2 } : current.bid2,
-          bid1: patch.bid1 ? { ...current.bid1, ...patch.bid1 } : current.bid1,
-          match: patch.match ? { ...current.match, ...patch.match } : current.match,
-          ask1: patch.ask1 ? { ...current.ask1, ...patch.ask1 } : current.ask1,
-          ask2: patch.ask2 ? { ...current.ask2, ...patch.ask2 } : current.ask2,
-          ask3: patch.ask3 ? { ...current.ask3, ...patch.ask3 } : current.ask3,
-        };
-
-        state.entities[symbol] = next;
+        const next = applyPriceBoardPatch(current, patch);
+        if (next) state.entities[symbol] = next;
       }
     },
   },

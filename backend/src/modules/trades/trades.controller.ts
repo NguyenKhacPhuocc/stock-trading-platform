@@ -13,6 +13,11 @@ export class TradesController {
     return this.trades.getUserTrades(user.id);
   }
 
+  @Get('history/:stockId')
+  getTradeHistory(@Param('stockId') stockId: string, @Query('limit') limit?: string) {
+    return this.trades.getTradesByStockId(stockId, limit ? parseInt(limit) : 20);
+  }
+
   @Get(':symbol')
   getBySymbol(@Param('symbol') symbol: string, @Query('limit') limit?: string) {
     return this.trades.getTradesBySymbol(symbol, limit ? parseInt(limit) : 50);

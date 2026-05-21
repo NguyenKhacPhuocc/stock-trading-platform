@@ -1,4 +1,6 @@
 import type { MarketInstrumentDto } from '../modules/market/dto/market-instrument.dto';
+import type { StockBoardSnapshot } from '../database/entities/stock-board-snapshot.entity';
+import { toNum } from '../modules/market/util/market-price.util';
 
 /** Loại payload WS — chỉ tick (snapshot bảng giá qua REST). */
 export const WS_TY = {
@@ -77,9 +79,98 @@ export function compactOrderbookDelta(
 export function compactTradeTick(
   lastPrice: number,
   matchedVolume: number,
+  priceChange: number,
+  priceChangePct: number,
 ): Record<string, unknown> {
   return {
     CP: lastPrice,
     CV: matchedVolume,
+    CH: priceChange,
+    CHP: priceChangePct,
   };
+}
+
+/** TOP3 + tổng dư mua/bán — UI đã có giá khớp từ REST khi mới connect. */
+export const BOARD_DEPTH_PATCH_KEYS = [
+  'B3',
+  'V3',
+  'B2',
+  'V2',
+  'B1',
+  'V1',
+  'S1',
+  'U1',
+  'S2',
+  'U2',
+  'S3',
+  'U3',
+  'TB',
+  'TO',
+] as const;
+
+export const BOARD_PATCH_KEYS = [
+  ...BOARD_DEPTH_PATCH_KEYS,
+  'CP',
+  'CV',
+  'CH',
+  'CHP',
+  'TT',
+  'HI',
+  'LO',
+  'OP',
+] as const;
+
+/** Patch bảng giá TOP3 + khớp + KL phiên — FE merge qua `ty=OB`. */
+export function compactSnapshotBoardPatch(
+  snap: StockBoardSnapshot,
+): Record<string, unknown> {
+  return {
+    B3: toNum(snap.bidPrice3),
+    V3: snap.bidVol3,
+    B2: toNum(snap.bidPrice2),
+    V2: snap.bidVol2,
+    B1: toNum(snap.bidPrice1),
+    V1: snap.bidVol1,
+    S1: toNum(snap.offerPrice1),
+    U1: snap.offerVol1,
+    S2: toNum(snap.offerPrice2),
+    U2: snap.offerVol2,
+    S3: toNum(snap.offerPrice3),
+    U3: snap.offerVol3,
+    CP: toNum(snap.lastPrice),
+    CV: snap.lastVolume,
+    CH: toNum(snap.priceChange ?? 0),
+    CHP: toNum(snap.priceChangePct ?? 0),
+    TT: snap.totalVolume,
+    HI: toNum(snap.highPrice),
+    LO: toNum(snap.lowPrice),
+    OP: toNum(snap.openPrice),
+    TB: snap.totalBidQty,
+    TO: snap.totalOfferQty,
+  };
+}
+
+/** Chỉ giữ field compact đổi so với lần emit trước. */
+export function diffSnapshotBoardPatch(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>,
+  keys: readonly string[] = BOARD_PATCH_KEYS,
+): Record<string, unknown> {
+  const changes: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (prev[k] !== next[k]) changes[k] = next[k];
+  }
+  return changes;
+}
+
+/** Lần đầu treo lệnh: chỉ depth khác 0 (giá khớp/phiên đã có từ REST). */
+export function firstDepthOnlyDelta(
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const changes: Record<string, unknown> = {};
+  for (const k of BOARD_DEPTH_PATCH_KEYS) {
+    const v = next[k];
+    if (v !== 0 && v !== undefined) changes[k] = v;
+  }
+  return changes;
 }

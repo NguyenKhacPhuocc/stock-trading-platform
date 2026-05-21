@@ -17,6 +17,7 @@ import {
   isAllowedWsExchange,
   wsRoomExchange,
   wsRoomInstrument,
+  wsRoomOrderTrade,
 } from './ws-realtime.constants';
 
 function normalizeWsSymbol(raw: unknown): string | null {
@@ -170,6 +171,58 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * Join room OT để nhận trade tick realtime.
+   * Payload: { stockId?: string | string[] }
+   */
+  @SubscribeMessage('subscribe:ot')
+  handleSubscribeOrderTrade(
+    @MessageBody() data: unknown,
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (!data || typeof data !== 'object') return;
+    const d = data as Record<string, unknown>;
+    const stockId = d.stockId;
+    const stockIds: string[] = [];
+    if (typeof stockId === 'string') {
+      stockIds.push(stockId);
+    } else if (Array.isArray(stockId)) {
+      for (const id of stockId) {
+        if (typeof id === 'string') stockIds.push(id);
+      }
+    }
+    for (const id of stockIds) {
+      const trimmed = typeof id === 'string' ? id.trim() : '';
+      if (trimmed.length > 0) {
+        void client.join(wsRoomOrderTrade(trimmed));
+      }
+    }
+  }
+
+  @SubscribeMessage('unsubscribe:ot')
+  handleUnsubscribeOrderTrade(
+    @MessageBody() data: unknown,
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (!data || typeof data !== 'object') return;
+    const d = data as Record<string, unknown>;
+    const stockId = d.stockId;
+    const stockIds: string[] = [];
+    if (typeof stockId === 'string') {
+      stockIds.push(stockId);
+    } else if (Array.isArray(stockId)) {
+      for (const id of stockId) {
+        if (typeof id === 'string') stockIds.push(id);
+      }
+    }
+    for (const id of stockIds) {
+      const trimmed = typeof id === 'string' ? id.trim() : '';
+      if (trimmed.length > 0) {
+        void client.leave(wsRoomOrderTrade(trimmed));
+      }
+    }
+  }
+
+  /**
    * Tick TOP sổ / khớp — fan-out `room:i:<SB>` và `room:e:<EX>`.
    * Dùng một broadcast chain để client join cả hai room chỉ nhận một lần.
    */
@@ -191,6 +244,11 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (ex) {
       broadcast = broadcast.to(wsRoomExchange(ex));
     }
+    if (envelope.ty === 'TT') {
+      this.logger.log(
+        `[order-flow] WS gateway emit | event=${WS_EVT.INSTRUMENT} rooms=i:${sym}${ex ? `,e:${ex}` : ''} ty=TT ch=${JSON.stringify(envelope.ch)}`,
+      );
+    }
     void broadcast.emit(WS_EVT.INSTRUMENT, envelope);
   }
 
@@ -210,6 +268,27 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   emitOrderMatched(userId: string, payload: unknown) {
+    this.logger.log(
+      `[order-flow] WS gateway emit | event=order:matched userId=${userId.slice(0, 8)} payload=${JSON.stringify(payload)}`,
+    );
     void this.server.to(`user:${userId}`).emit('order:matched', payload);
+  }
+
+  emitTradeTick(input: {
+    stockId: string;
+    type: string;
+    seq: number;
+    data: unknown;
+  }) {
+    const room = wsRoomOrderTrade(input.stockId);
+    const envelope = buildRealtimeEnvelope({
+      type: input.type,
+      seq: input.seq,
+      data: input.data,
+    });
+    this.logger.log(
+      `[order-flow] WS gateway emit | event=${WS_EVT.ORDER_TRADE} room=ot:${input.stockId.slice(0, 8)} type=${input.type}`,
+    );
+    void this.server.to(room).emit(WS_EVT.ORDER_TRADE, envelope);
   }
 }

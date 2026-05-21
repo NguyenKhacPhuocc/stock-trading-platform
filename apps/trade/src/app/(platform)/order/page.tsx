@@ -245,7 +245,7 @@ export default function OrderPage() {
       }
       setQuantity('');
       setPrice('');
-      await reloadOrders();
+      void reloadOrders({ silent: true });
       toast.success('Đặt lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Đặt lệnh thất bại';
@@ -281,7 +281,7 @@ export default function OrderPage() {
       if (!res.ok || json?.s !== 'ok') {
         throw new Error(json?.em || 'Hủy lệnh thất bại');
       }
-      await reloadOrders();
+      void reloadOrders({ silent: true });
       toast.success('Hủy lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Hủy lệnh thất bại';
@@ -341,7 +341,17 @@ export default function OrderPage() {
           onCancelOrder={handleCancelOrder}
           cancellingOrderId={cancellingOrderId}
         />
-        <OrderTradeHistoryPanel panelCardClassName={panelCard} />
+        <OrderTradeHistoryPanel
+          panelCardClassName={panelCard}
+          stockId={
+            (() => {
+              const symKey = effectiveSymbol.trim().toUpperCase();
+              const fromQuotes = searchUniverse.find((u) => u.symbol === symKey);
+              return fromQuotes?.stockId ?? marketEntities[symKey]?.id ?? '';
+            })()
+          }
+          symbol={effectiveSymbol}
+        />
       </section>
     </div>
   );

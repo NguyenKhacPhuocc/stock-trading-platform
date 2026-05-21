@@ -15,6 +15,7 @@ import {
   compactDeltaToPriceBoardPatch,
   parseInstrumentPatchMessage,
 } from '@/lib/market-ws-expand';
+import { createMarketPatchQueue } from '@/lib/market-ws-patch-queue';
 import { WS_INSTRUMENT_TY, WS_SERVER_EVT } from '@/lib/ws-realtime.constants';
 
 const TradeRealtimeSocketContext = createContext<Socket | null>(null);
@@ -50,6 +51,10 @@ export function TradeRealtimeProvider({ children }: { children: ReactNode }) {
       transports: ['websocket', 'polling'],
     });
 
+    const patchQueue = createMarketPatchQueue((items) => {
+      dispatch(batchPatchRows(items));
+    });
+
     const onInstrument = (msg: unknown) => {
       if (msg == null || typeof msg !== 'object') return;
       const ty = (msg as Record<string, unknown>).ty;
@@ -60,13 +65,14 @@ export function TradeRealtimeProvider({ children }: { children: ReactNode }) {
       if (!parsed) return;
       const patch = compactDeltaToPriceBoardPatch(parsed.ch);
       if (Object.keys(patch).length === 0) return;
-      dispatch(batchPatchRows([{ symbol: parsed.symbol, patch }]));
+      patchQueue.push(parsed.symbol, patch);
     };
 
     s.on(WS_SERVER_EVT.INSTRUMENT, onInstrument);
     queueMicrotask(() => setSocket(s));
 
     return () => {
+      patchQueue.dispose();
       s.off(WS_SERVER_EVT.INSTRUMENT, onInstrument);
       s.close();
       queueMicrotask(() => setSocket(null));

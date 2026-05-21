@@ -14,6 +14,7 @@ import { Order } from './order.entity';
 @Index(['createdAt'])
 @Index(['buyOrderId'])
 @Index(['sellOrderId'])
+@Index(['stockId', 'createdAt'])
 export class Trade {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -35,6 +36,12 @@ export class Trade {
    */
   @Column({ name: 'trade_value', type: 'numeric', precision: 20, scale: 2 })
   tradeValue: number;
+
+  /**
+   * Denormalize: stockId từ buyOrder/sellOrder — optimize query lịch sử khớp theo symbol.
+   */
+  @Column({ name: 'stock_id', type: 'uuid', nullable: true })
+  stockId: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

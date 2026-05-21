@@ -15,6 +15,7 @@ import {
   WAL_SNAPSHOT_INTERVAL_MS,
   WAL_SNAPSHOT_MAX_AGE_MS,
 } from './util/matching.constants';
+import { bookOrdersLine, orderRef } from './util/order-flow-log.util';
 
 type WalSnapshot = {
   seq: string;
@@ -59,6 +60,9 @@ export class OrderbookWalService implements OnModuleInit, OnModuleDestroy {
       });
       this.lastWalSeq.set(sym, seq);
       await this.trimIfNeeded(sym);
+      this.logger.log(
+        `[order-flow] WAL REST | ${sym} order ${orderRef(order.orderId)} qty=${order.remainingQty} @ ${order.price}`,
+      );
     } catch (e: unknown) {
       this.logger.warn(`appendRest ${sym}: ${String(e)}`);
     }
@@ -77,8 +81,26 @@ export class OrderbookWalService implements OnModuleInit, OnModuleDestroy {
       });
       this.lastWalSeq.set(sym, seq);
       await this.trimIfNeeded(sym);
+      this.logger.log(`[order-flow] WAL REMOVE | ${sym} order ${orderRef(orderId)}`);
     } catch (e: unknown) {
       this.logger.warn(`appendRemove ${sym}: ${String(e)}`);
+    }
+  }
+
+  /** Ghi snapshot WAL ngay (kể cả sổ rỗng) — tránh snapshot cũ còn lệnh đã fill. */
+  async persistBook(
+    sym: string,
+    stockId: string,
+    book: SymbolBook,
+  ): Promise<void> {
+    this.symToStockId.set(sym, stockId);
+    try {
+      await this.saveSnapshot(sym, book);
+      this.logger.log(
+        `[order-flow] WAL snapshot persisted | ${sym} ${bookOrdersLine(book)}`,
+      );
+    } catch (e: unknown) {
+      this.logger.warn(`persistBook ${sym}: ${String(e)}`);
     }
   }
 
@@ -162,7 +184,6 @@ export class OrderbookWalService implements OnModuleInit, OnModuleDestroy {
   private async snapshotAll(): Promise<void> {
     for (const [sym, stockId] of this.symToStockId) {
       const book = this.books.getBook(stockId);
-      if (book.bidLevels.length === 0 && book.askLevels.length === 0) continue;
       try {
         await this.saveSnapshot(sym, book);
       } catch (e: unknown) {

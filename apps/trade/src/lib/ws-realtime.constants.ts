@@ -3,6 +3,7 @@ export const WS_SERVER_EVT = {
   INSTRUMENT: 'i',
   INDEX: 'idx',
   EXCHANGE: 'e',
+  ORDER_TRADE: 'ot',
   ORDER_MATCHED: 'order:matched',
 } as const;
 

@@ -6,7 +6,11 @@ import { Tooltip } from '@/components/tooltip';
 import { useRouter } from 'next/navigation';
 import { useAppDispatch } from '@/store/hooks';
 import { setSession } from '@/store/slices/auth.slice';
-import { fetchAuthenticatedSession } from '@/lib/fetch-auth-session';
+import {
+  AUTH_SESSION_QUERY_KEY,
+  fetchAuthenticatedSession,
+} from '@/lib/fetch-auth-session';
+import { queryClient } from '@stock/utils';
 import { GATEWAY_AUTH } from '@/lib/gateway-paths';
 import { bffClient } from '@stock/utils';
 import { APP_CONFIG } from '@/config/app.config';
@@ -87,8 +91,10 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
         const res = await bffClient.post(GATEWAY_AUTH.login, loginForm);
         if (!res.data?.d?.user) throw new Error('Không tải được thông tin người dùng sau đăng nhập');
         const session = await fetchAuthenticatedSession();
-        if (session) dispatch(setSession(session));
-        else throw new Error('Không tải được session sau đăng nhập');
+        if (session) {
+          queryClient.setQueryData(AUTH_SESSION_QUERY_KEY, session);
+          dispatch(setSession(session));
+        } else throw new Error('Không tải được session sau đăng nhập');
         onClose();
         router.refresh();
       } else {

@@ -13,12 +13,12 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ReduxProvider store={store}>
       <TradeRealtimeProvider>
-        <AuthSessionProvider>
-          <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          <AuthSessionProvider>
             <SessionHydrationGate>{children}</SessionHydrationGate>
             <Toaster richColors position="bottom-right" closeButton duration={5000} />
-          </QueryClientProvider>
-        </AuthSessionProvider>
+          </AuthSessionProvider>
+        </QueryClientProvider>
       </TradeRealtimeProvider>
     </ReduxProvider>
   );
