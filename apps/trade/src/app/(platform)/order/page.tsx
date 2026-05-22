@@ -25,6 +25,7 @@ type OrderRow = {
   symbol: string;
   quantity: number;
   matchedQty: number;
+  avgMatchedPrice: number | null;
   price: number | null;
   orderType: string;
   status: string;
@@ -44,6 +45,8 @@ function mapOrderListItem(item: Record<string, unknown>): OrderRow {
     ),
     quantity: Number(item.quantity ?? 0),
     matchedQty: Number(item.matchedQty ?? 0),
+    avgMatchedPrice:
+      item.avgMatchedPrice == null ? null : Number(item.avgMatchedPrice),
     price: item.price == null ? null : Number(item.price),
     orderType: String(item.orderType ?? ''),
     status: String(item.status ?? ''),
@@ -193,7 +196,11 @@ export default function OrderPage() {
     : '';
   const liveOrderBook = useOrderBookRealtime(effectiveSymbol);
   const isLo = orderType === 'LO';
-  const baseValid = Boolean(effectiveSymbol) && Number(quantity) > 0 && (!isLo || Number(price) > 0);
+  const isMak = orderType === 'MAK';
+  const baseValid =
+    Boolean(effectiveSymbol) &&
+    Number(quantity) > 0 &&
+    (isMak || (isLo && Number(price) > 0));
   const canSubmit =
     orderEntryTab === 'regular' ? baseValid : baseValid && Number(triggerPrice) > 0;
 
@@ -321,6 +328,7 @@ export default function OrderPage() {
           price={price}
           onPriceChange={setPrice}
           isLo={isLo}
+          isMak={isMak}
           triggerOperator={triggerOperator}
           onTriggerOperatorChange={setTriggerOperator}
           triggerPrice={triggerPrice}

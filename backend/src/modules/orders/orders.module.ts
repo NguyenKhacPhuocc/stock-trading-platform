@@ -9,12 +9,14 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
+import { Trade } from '../../database/entities/trade.entity';
 import { MatchingModule } from '../matching/matching.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Order,
+      Trade,
       Stock,
       StockBoardSnapshot,
       TradingAccount,

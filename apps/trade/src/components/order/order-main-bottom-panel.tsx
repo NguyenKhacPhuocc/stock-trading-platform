@@ -1,4 +1,8 @@
 import type { BottomTab } from './order-types';
+import {
+  formatOrderRemainingLabel,
+  formatOrderStatusLabel,
+} from './order-types';
 
 type OrderMainBottomPanelProps = {
   panelCardClassName: string;
@@ -11,6 +15,7 @@ type OrderMainBottomPanelProps = {
     symbol: string;
     quantity: number;
     matchedQty: number;
+    avgMatchedPrice: number | null;
     price: number | null;
     orderType: string;
     status: string;
@@ -67,7 +72,7 @@ export function OrderMainBottomPanel({
 
       <div className="h-[calc(100%-37px)] overflow-auto">
         {bottomTab === 'orders' && (
-          <table className="w-full min-w-[900px] table-fixed text-xs">
+          <table className="w-full min-w-[980px] table-fixed text-xs">
             <thead className="bg-[#11141b] text-muted">
               <tr>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Sửa/Hủy</th>
@@ -79,6 +84,7 @@ export function OrderMainBottomPanel({
                 <th className="border-b border-border px-2 py-2 text-right font-medium">Giá đặt</th>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Loại lệnh</th>
                 <th className="border-b border-border px-2 py-2 text-left font-medium">Trạng thái</th>
+                <th className="border-b border-border px-2 py-2 text-right font-medium">KL còn/hủy</th>
                 <th className="border-b border-border px-2 py-2 text-right font-medium">KL khớp</th>
                 <th className="border-b border-border px-2 py-2 text-right font-medium">Giá khớp TB</th>
               </tr>
@@ -86,13 +92,13 @@ export function OrderMainBottomPanel({
             <tbody>
               {isLoadingOrders ? (
                 <tr>
-                  <td colSpan={11} className="px-2 py-8 text-center text-muted">
+                  <td colSpan={12} className="px-2 py-8 text-center text-muted">
                     Đang tải danh sách lệnh...
                   </td>
                 </tr>
               ) : orders.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-2 py-8 text-center text-muted">
+                  <td colSpan={12} className="px-2 py-8 text-center text-muted">
                     Chưa có dữ liệu sổ lệnh.
                   </td>
                 </tr>
@@ -121,13 +127,30 @@ export function OrderMainBottomPanel({
                     <td className="px-2 py-2 font-medium">{order.symbol}</td>
                     <td className="px-2 py-2 text-right">{order.quantity.toLocaleString('vi-VN')}</td>
                     <td className="px-2 py-2 text-right">
-                      {typeof order.price === 'number' ? order.price.toLocaleString('vi-VN') : '--'}
+                      {order.orderType === 'MAK'
+                        ? 'MP'
+                        : typeof order.price === 'number'
+                          ? order.price.toLocaleString('vi-VN')
+                          : '--'}
                     </td>
                     <td className="px-2 py-2">{order.orderType}</td>
-                    <td className="px-2 py-2">{order.status}</td>
+                    <td className="px-2 py-2" title={order.status}>
+                      {formatOrderStatusLabel(order.status)}
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      {formatOrderRemainingLabel(
+                        order.status,
+                        order.quantity,
+                        order.matchedQty,
+                      ).value}
+                    </td>
                     <td className="px-2 py-2 text-right">{order.matchedQty.toLocaleString('vi-VN')}</td>
                     <td className="px-2 py-2 text-right">
-                      --
+                      {order.matchedQty > 0 &&
+                      order.avgMatchedPrice != null &&
+                      Number.isFinite(order.avgMatchedPrice)
+                        ? order.avgMatchedPrice.toLocaleString('vi-VN')
+                        : '--'}
                     </td>
                   </tr>
                 ))

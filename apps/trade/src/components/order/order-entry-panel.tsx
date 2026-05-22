@@ -17,6 +17,7 @@ type OrderEntryPanelProps = {
   price: string;
   onPriceChange: (value: string) => void;
   isLo: boolean;
+  isMak: boolean;
   triggerOperator: 'gte' | 'lte';
   onTriggerOperatorChange: (op: 'gte' | 'lte') => void;
   triggerPrice: string;
@@ -43,6 +44,7 @@ export function OrderEntryPanel({
   price,
   onPriceChange,
   isLo,
+  isMak,
   triggerOperator,
   onTriggerOperatorChange,
   triggerPrice,
@@ -136,6 +138,7 @@ export function OrderEntryPanel({
             className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-xs outline-none"
           >
             <option value="LO">LO</option>
+            <option value="MAK">MAK</option>
             <option value="ATO">ATO</option>
             <option value="ATC">ATC</option>
           </select>
@@ -143,7 +146,9 @@ export function OrderEntryPanel({
             value={price}
             onChange={(e) => onPriceChange(e.target.value)}
             disabled={!isLo}
-            placeholder={isLo ? 'Giá đặt' : 'Giá thị trường'}
+            placeholder={
+              isLo ? 'Giá đặt' : isMak ? 'Giá thị trường (MAK)' : 'Giá thị trường'
+            }
             inputMode="decimal"
             className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-xs outline-none disabled:opacity-60"
           />

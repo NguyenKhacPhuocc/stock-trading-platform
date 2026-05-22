@@ -7,6 +7,7 @@ import {
   Min,
   MinLength,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { OrderSide, OrderType } from '../../../common/const';
 
@@ -26,9 +27,10 @@ export class CreateOrderDto {
   @IsEnum(OrderType)
   orderType: OrderType;
 
-  @IsOptional()
+  /** LO: bắt buộc. MAK: server tự lấy trần/sàn từ snapshot. */
+  @ValidateIf((o: CreateOrderDto) => o.orderType === OrderType.LO)
   @IsNumber()
-  @Min(0)
+  @Min(0.01)
   price?: number;
 
   @IsInt()

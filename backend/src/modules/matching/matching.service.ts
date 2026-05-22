@@ -14,7 +14,18 @@ import IORedis from 'ioredis';
 import { Repository } from 'typeorm';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
-import { OrderStatus } from '../../common/const';
+import { Wallet } from '../../database/entities/wallet.entity';
+import { Position } from '../../database/entities/position.entity';
+import { CashTransaction } from '../../database/entities/cash-transaction.entity';
+import { TradingAccount } from '../../database/entities/trading-account.entity';
+import {
+  OrderSide,
+  OrderStatus,
+  OrderType,
+  TransactionType,
+} from '../../common/const';
+import { isMakOrderType } from '../orders/util/mak-order.util';
+import type { OrderFillNotify } from './dto/order-fill-notify.dto';
 import { MarketService } from '../market/market.service';
 import type { QueuedOrder } from './dto/matching.dto';
 import type {
@@ -26,7 +37,6 @@ import { TradeFillService } from './trade-fill.service';
 import { OrderbookWalService } from './orderbook-wal.service';
 import { OrderbookWsService } from './orderbook-ws.service';
 import { AppGateway } from '../../websocket/app.gateway';
-import type { OrderFillNotify } from './dto/order-fill-notify.dto';
 import { bookOrdersLine, orderRef } from './util/order-flow-log.util';
 
 /**
@@ -265,7 +275,8 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     if (
       order.status === OrderStatus.CANCELLED ||
       order.status === OrderStatus.REJECTED ||
-      order.status === OrderStatus.FILLED
+      order.status === OrderStatus.FILLED ||
+      order.status === OrderStatus.PARTIAL_CANCELLED
     ) {
       this.logger.log(
         `[order-flow] skip matching | order ${ref} status=${order.status}`,
@@ -335,16 +346,28 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         this.emitTradeTicks(stockId, fills);
       }
 
+      const isMak = order.orderType === OrderType.MAK;
+
       if (remainder && remainder.remainingQty > 0) {
-        this.logger.log(
-          `[order-flow] order rest on book | ${orderRef(remainder.orderId)} qty=${remainder.remainingQty} @ ${remainder.price}`,
-        );
-        book.removeOrder(remainder.orderId);
-        book.rest(remainder);
-        await this.wal.appendRest(sym, stockId, remainder);
+        if (isMak) {
+          this.logger.log(
+            `[order-flow] MAK kill remainder | ${orderRef(remainder.orderId)} qty=${remainder.remainingQty}`,
+          );
+          const makNotify = await this.killMakRemainder(order.id, sym);
+          if (makNotify) {
+            this.emitOrderMatchedNotifies([makNotify]);
+          }
+        } else {
+          this.logger.log(
+            `[order-flow] order rest on book | ${orderRef(remainder.orderId)} qty=${remainder.remainingQty} @ ${remainder.price}`,
+          );
+          book.removeOrder(remainder.orderId);
+          book.rest(remainder);
+          await this.wal.appendRest(sym, stockId, remainder);
+        }
       }
 
-      if (fills.length > 0) {
+      if (fills.length > 0 || isMak) {
         await this.orderbookWs.syncBookFromDb(sym, stockId, book);
       }
 
@@ -389,6 +412,94 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
       stockId,
       book,
     } satisfies BookCancelledPayload);
+  }
+
+  /** MAK: hủy phần còn lại, mở khóa tài sản — không treo sổ. */
+  private async killMakRemainder(
+    orderId: string,
+    symbol: string,
+  ): Promise<OrderFillNotify | null> {
+    return this.orderRepo.manager.transaction(async (manager) => {
+      const order = await manager.findOne(Order, {
+        where: { id: orderId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order || !isMakOrderType(order.orderType)) return null;
+
+      const remainingQty = Number(order.quantity) - Number(order.matchedQty);
+      if (remainingQty <= 0) return null;
+
+      if (order.side === OrderSide.BUY) {
+        const wallet = await manager.findOne(Wallet, {
+          where: { tradingAccountId: order.tradingAccountId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!wallet) throw new Error('WALLET_NOT_FOUND');
+        const lockedAmount = Number(order.price ?? 0) * remainingQty;
+        wallet.availableBalance =
+          Number(wallet.availableBalance) + lockedAmount;
+        wallet.lockedBalance = Math.max(
+          0,
+          Number(wallet.lockedBalance) - lockedAmount,
+        );
+        await manager.save(wallet);
+        await manager.save(
+          manager.create(CashTransaction, {
+            walletId: wallet.id,
+            type: TransactionType.BUY_UNLOCK,
+            amount: lockedAmount,
+            balanceAfter:
+              Number(wallet.availableBalance) + Number(wallet.lockedBalance),
+            refOrderId: order.id,
+            description: `MAK hủy phần dư ${remainingQty} ${symbol}`,
+          }),
+        );
+      } else {
+        const position = await manager.findOne(Position, {
+          where: {
+            tradingAccountId: order.tradingAccountId,
+            stockId: order.stockId,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (position) {
+          position.quantity = Number(position.quantity) + remainingQty;
+          position.lockedQuantity = Math.max(
+            0,
+            Number(position.lockedQuantity) - remainingQty,
+          );
+          await manager.save(position);
+        }
+      }
+
+      const matchedQty = Number(order.matchedQty);
+      if (matchedQty <= 0) {
+        order.status = OrderStatus.CANCELLED;
+        order.cancelledAt = new Date();
+      } else {
+        order.status = OrderStatus.PARTIAL_CANCELLED;
+        order.cancelledAt = new Date();
+      }
+      await manager.save(order);
+
+      const account = await manager.findOne(TradingAccount, {
+        where: { id: order.tradingAccountId },
+      });
+      if (!account) return null;
+
+      this.logger.log(
+        `[order-flow] MAK remainder killed DB | ${orderRef(order.id, order.orderCode)} status=${order.status} matched=${order.matchedQty}/${order.quantity}`,
+      );
+
+      return {
+        orderId: order.id,
+        userId: account.userId,
+        status: order.status,
+        matchedQty: Number(order.matchedQty),
+        quantity: Number(order.quantity),
+        side: order.side,
+      };
+    });
   }
 
   private emitOrderMatchedNotifies(notifies: OrderFillNotify[]): void {

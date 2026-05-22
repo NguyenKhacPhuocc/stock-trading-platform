@@ -1,9 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
-import {
-  formatInt,
-  formatPrice,
-  type PriceTone,
-} from './price-board-utils';
+import { formatChangePrice, formatInt, formatPrice, type PriceTone} from './price-board-utils';
 
 export type BoardCellTone = PriceTone | 'muted' | 'white';
 
@@ -22,7 +18,7 @@ export type PriceBoardCellProps = {
   tone?: BoardCellTone;
   rawValue?: number | string;
   /** Cách format số hiển thị — không truyền children để memo có hiệu lực. */
-  format?: 'price' | 'int' | 'pct' | 'text';
+  format?: 'price' | 'changePrice' | 'int' | 'pct' | 'text';
   flashStyle?: 'delta' | 'neutral';
   className?: string;
 };
@@ -39,6 +35,10 @@ function formatDisplay(
     if (rawValue === 0) return '';
     return `${rawValue >= 0 ? '+' : ''}${rawValue.toFixed(2)}%`;
   }
+  if (format === 'changePrice') {
+    return typeof rawValue === 'number' ? formatChangePrice(rawValue) : '';
+  }
+  // Giá mức sổ / khớp: 0 = ô trống
   return rawValue > 0 ? formatPrice(rawValue) : '';
 }
 

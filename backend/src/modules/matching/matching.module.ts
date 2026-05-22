@@ -6,6 +6,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { Stock } from '../../database/entities/stock.entity';
+import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { MatchingService } from './matching.service';
 import { BookRegistry } from './book-registry.service';
 import { TradeFillService } from './trade-fill.service';
@@ -24,6 +25,7 @@ import { MarketModule } from '../market/market.module';
       Position,
       CashTransaction,
       Stock,
+      TradingAccount,
     ]),
     forwardRef(() => WebsocketModule),
     forwardRef(() => MarketModule),

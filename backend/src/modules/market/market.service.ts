@@ -505,6 +505,22 @@ export class MarketService implements OnApplicationBootstrap {
     };
   }
 
+  private applyPriceChangeFromReference(
+    snap: StockBoardSnapshot,
+    lastPrice: number,
+  ): void {
+    const refPx = toNum(snap.referencePrice);
+    const lastPx = toNum(lastPrice);
+    if (refPx <= 0 || lastPx <= 0) {
+      snap.priceChange = 0;
+      snap.priceChangePct = 0;
+      return;
+    }
+    const priceChange = lastPx - refPx;
+    snap.priceChange = Math.round(priceChange * 100) / 100;
+    snap.priceChangePct = Math.round((priceChange / refPx) * 10000) / 10000;
+  }
+
   private fillSnapshotFromOrdersAndTrades(
     snap: StockBoardSnapshot,
     orders: Order[],
@@ -522,13 +538,7 @@ export class MarketService implements OnApplicationBootstrap {
       snap.totalVolume = session.totalVol;
       snap.totalValue = session.totalVal;
 
-      const prev =
-        tradesAsc.length >= 2 ? tradesAsc[tradesAsc.length - 2] : undefined;
-      const prePx = prev ? toNum(prev.price) : 0;
-      const priceChange = prePx > 0 ? session.lastPrice - prePx : 0;
-      snap.priceChange = priceChange;
-      snap.priceChangePct =
-        session.lastPrice > 0 ? (priceChange / session.lastPrice) * 100 : 0;
+      this.applyPriceChangeFromReference(snap, session.lastPrice);
     }
 
     snap.bidPrice1 = depth.bid[0].price;

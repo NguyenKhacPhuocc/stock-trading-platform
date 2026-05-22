@@ -1,7 +1,13 @@
 export type Exchange = 'HOSE' | 'HNX' | 'UPCOM';
 export type OrderSide = 'buy' | 'sell';
-export type OrderType = 'LO' | 'ATO' | 'ATC';
-export type OrderStatus = 'pending' | 'partial' | 'filled' | 'cancelled' | 'rejected';
+export type OrderType = 'LO' | 'MAK' | 'ATO' | 'ATC';
+export type OrderStatus =
+  | 'pending'
+  | 'partial'
+  | 'partial_cancelled'
+  | 'filled'
+  | 'cancelled'
+  | 'rejected';
 export type UserRole = 'user' | 'admin';
 
 export interface User {
@@ -45,6 +51,7 @@ export interface Order {
   price: number | null;
   quantity: number;
   matchedQty: number;
+  avgMatchedPrice?: number | null;
   status: OrderStatus;
   createdAt: string;
   stock?: Pick<Stock, 'symbol' | 'name'>;

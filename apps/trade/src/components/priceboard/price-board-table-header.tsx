@@ -13,14 +13,14 @@ export const PriceBoardTableHeader = memo(function PriceBoardTableHeader() {
         <div className={`${cell} border-x-0`} style={{ gridColumn: 1, gridRow: '1 / span 2' }}>
           Mã CK
         </div>
-        <div className={`${cell} text-price-ref`} style={{ gridColumn: 2, gridRow: '1 / span 2' }}>
-          TC
-        </div>
-        <div className={`${cell} text-price-ceil`} style={{ gridColumn: 3, gridRow: '1 / span 2' }}>
+        <div className={`${cell} text-price-ceil`} style={{ gridColumn: 2, gridRow: '1 / span 2' }}>
           Trần
         </div>
-        <div className={`${cell} text-price-floor`} style={{ gridColumn: 4, gridRow: '1 / span 2' }}>
+        <div className={`${cell} text-price-floor`} style={{ gridColumn: 3, gridRow: '1 / span 2' }}>
           Sàn
+        </div>
+        <div className={`${cell} text-price-ref`} style={{ gridColumn: 4, gridRow: '1 / span 2' }}>
+          TC
         </div>
         <div className={group} style={{ gridColumn: '5 / span 6' }}>
           Bên mua

@@ -160,7 +160,11 @@ function MatchCells({ symbol }: { symbol: string }) {
     <>
       <PriceBoardCell tone={matchTone} rawValue={p} format="price" />
       <PriceBoardCell tone={matchTone} rawValue={v} format="int" />
-      <PriceBoardCell tone={chgTone(priceChange)} rawValue={priceChange} format="price" />
+      <PriceBoardCell
+        tone={chgTone(priceChange)}
+        rawValue={priceChange}
+        format="changePrice"
+      />
       <PriceBoardCell
         tone={chgTone(priceChangePercent)}
         rawValue={priceChangePercent}
@@ -222,9 +226,9 @@ export const PriceBoardRow = memo(
         style={priceBoardGridStyle}
       >
         <SymbolCell symbol={symbol} isPinned={isPinned} onTogglePin={onTogglePin} />
-        <PriceBoardCell tone="ref" rawValue={band.ref} format="price" />
         <PriceBoardCell tone="ceil" rawValue={band.ceil} format="price" />
         <PriceBoardCell tone="floor" rawValue={band.floor} format="price" />
+        <PriceBoardCell tone="ref" rawValue={band.ref} format="price" />
         <CornerCells symbol={symbol} side="bid" />
         <MatchCells symbol={symbol} />
         <CornerCells symbol={symbol} side="ask" />

@@ -21,6 +21,12 @@ export function formatPrice(n: number): string {
   }).format(n / 1000);
 }
 
+export function formatChangePrice(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return '';
+  const body = formatPrice(Math.abs(n));
+  return n > 0 ? `+${body}` : `-${body}`;
+}
+
 export type PriceTone = 'ceil' | 'floor' | 'up' | 'down' | 'ref';
 
 export function toneFromPrice(p: number, ref: number, ceil: number, floor: number): PriceTone {

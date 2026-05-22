@@ -13,7 +13,7 @@ import {
 import { Stock } from '../../database/entities/stock.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { Order } from '../../database/entities/order.entity';
-import { DEFAULT_STOCK_BOARD_ID, OrderStatus } from '../../common/const';
+import { DEFAULT_STOCK_BOARD_ID, OrderStatus, OrderType } from '../../common/const';
 import type { MarketDeltaEnvelope, QueuedOrder } from './dto/matching.dto';
 import { SymbolBook, type PriceLevel } from './util/symbol-book';
 import {
@@ -354,6 +354,7 @@ export class OrderbookWsService {
     let count = 0;
     for (const o of rows) {
       if (excludeOrderId && o.id === excludeOrderId) continue;
+      if (o.orderType === OrderType.MAK) continue;
       const remaining = Number(o.quantity) - Number(o.matchedQty);
       if (remaining <= 0) continue;
       const queued: QueuedOrder = {

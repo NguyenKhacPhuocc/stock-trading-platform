@@ -6,12 +6,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Order } from '../../database/entities/order.entity';
-import {
-  OrderType,
-  OrderStatus,
-  OrderSide,
-  TransactionType,
-} from '../../common/const';
+import { Trade } from '../../database/entities/trade.entity';
+import { OrderType, OrderStatus, OrderSide, TransactionType } from '../../common/const';
 import { Stock } from '../../database/entities/stock.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
@@ -20,12 +16,10 @@ import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { MatchingService } from '../matching/matching.service';
-import {
-  formatCreateOrder,
-  orderRef,
-} from '../matching/util/order-flow-log.util';
+import { formatCreateOrder, orderRef } from '../matching/util/order-flow-log.util';
 import { BusinessException } from '../../common/errors/business.exception';
 import type { AppErrorKey } from '../../common/errors/error-const';
+import { isMakOrderType, resolveMakLimitPrice } from './util/mak-order.util';
 
 /**
  * Đặt / hủy lệnh — ghi DB + khóa tài sản, rồi đẩy job khớp.
@@ -37,6 +31,7 @@ export class OrdersService {
 
   constructor(
     @InjectRepository(Order) private orderRepo: Repository<Order>,
+    @InjectRepository(Trade) private tradeRepo: Repository<Trade>,
     @InjectRepository(Stock) private stockRepo: Repository<Stock>,
     @InjectRepository(StockBoardSnapshot)
     private snapshotRepo: Repository<StockBoardSnapshot>,
@@ -57,13 +52,15 @@ export class OrdersService {
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
-    if (dto.orderType !== OrderType.LO) {
+    const isLo = dto.orderType === OrderType.LO;
+    const isMak = isMakOrderType(dto.orderType);
+    if (!isLo && !isMak) {
       this.throwBusinessError('ORDER_TYPE_NOT_SUPPORTED');
     }
     if (dto.quantity % 100 !== 0) {
       this.throwBusinessError('INVALID_QUANTITY_LOT');
     }
-    if (!dto.price || dto.price <= 0) {
+    if (isLo && (!dto.price || dto.price <= 0)) {
       this.throwBusinessError('INVALID_PRICE');
     }
 
@@ -77,11 +74,25 @@ export class OrdersService {
     if (!stock) {
       this.throwBusinessError('STOCK_NOT_FOUND');
     }
-    await this.checkAmplitude(stock.id, dto.price);
+
+    const snap = await this.snapshotRepo.findOne({
+      where: { stockId: stock.id },
+      order: { tradingDate: 'DESC', updatedAt: 'DESC' },
+    });
+    if (!snap) {
+      this.throwBusinessError('MISSING_REFERENCE_PRICE');
+    }
+    const floor = Number(snap.floorPrice);
+    const ceiling = Number(snap.ceilingPrice);
+
+    const orderPrice = isMak
+      ? resolveMakLimitPrice(dto.side, floor, ceiling)
+      : Number(dto.price);
+    await this.checkAmplitude(stock.id, orderPrice);
 
     const sym = stock.symbol.toUpperCase();
     this.logger.log(
-      `[order-flow] ${formatCreateOrder(dto.side, dto.quantity, sym, dto.price)} | account=${account.accountId}`,
+      `[order-flow] ${formatCreateOrder(dto.side, dto.quantity, sym, orderPrice)}${isMak ? ' MAK' : ''} | account=${account.accountId}`,
     );
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -96,7 +107,7 @@ export class OrdersService {
             if (!wallet) {
               this.throwBusinessError('WALLET_NOT_FOUND', undefined, 404);
             }
-            const estimatedCost = Number(dto.price) * Number(dto.quantity);
+            const estimatedCost = Number(orderPrice) * Number(dto.quantity);
             const available = Number(wallet.availableBalance);
             if (available < estimatedCost) {
               this.throwBusinessError('INSUFFICIENT_BALANCE');
@@ -112,7 +123,7 @@ export class OrdersService {
               stockId: dto.stockId,
               side: dto.side,
               orderType: dto.orderType,
-              price: dto.price,
+              price: orderPrice,
               quantity: dto.quantity,
             });
             const persisted = await manager.save(order);
@@ -125,7 +136,7 @@ export class OrdersService {
                   Number(wallet.availableBalance) +
                   Number(wallet.lockedBalance),
                 refOrderId: persisted.id,
-                description: `Khóa tiền cho lệnh ${persisted.orderCode ?? persisted.id}`,
+                description: `Khóa tiền cho lệnh ${persisted.orderCode ?? persisted.id}${isMak ? ' (MAK)' : ''}`,
               }),
             );
             return persisted;
@@ -153,7 +164,7 @@ export class OrdersService {
             stockId: dto.stockId,
             side: dto.side,
             orderType: dto.orderType,
-            price: dto.price,
+            price: orderPrice,
             quantity: dto.quantity,
           });
           return manager.save(order);
@@ -188,11 +199,55 @@ export class OrdersService {
 
   async getUserOrders(userId: string) {
     const account = await this.getDefaultAccount(userId);
-    return this.orderRepo.find({
+    const orders = await this.orderRepo.find({
       where: { tradingAccountId: account.id },
       relations: { stock: true, tradingAccount: true },
       order: { createdAt: 'DESC' },
     });
+    if (orders.length === 0) return [];
+    const avgMap = await this.avgMatchedPriceByOrderIds(
+      orders.map((o) => o.id),
+    );
+    return orders.map((o) => ({
+      ...o,
+      avgMatchedPrice: avgMap.get(o.id) ?? null,
+    }));
+  }
+
+  /** Giá khớp TB = Σ(price×qty) / Σ(qty) từ mọi trade của lệnh (mua hoặc bán). */
+  private async avgMatchedPriceByOrderIds(
+    orderIds: string[],
+  ): Promise<Map<string, number>> {
+    if (orderIds.length === 0) return new Map();
+    const rows: { order_id: string; avg_price: string | null }[] =
+      await this.tradeRepo.query(
+        `SELECT order_id,
+                CASE WHEN SUM(qty) > 0 THEN SUM(val) / SUM(qty) ELSE NULL END AS avg_price
+         FROM (
+           SELECT buy_order_id AS order_id,
+                  (price * quantity) AS val,
+                  quantity AS qty
+           FROM trades
+           WHERE buy_order_id = ANY($1::uuid[])
+           UNION ALL
+           SELECT sell_order_id,
+                  (price * quantity),
+                  quantity
+           FROM trades
+           WHERE sell_order_id = ANY($1::uuid[])
+         ) t
+         GROUP BY order_id`,
+        [orderIds],
+      );
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      if (r.avg_price == null) continue;
+      const v = Number(r.avg_price);
+      if (Number.isFinite(v) && v > 0) {
+        map.set(r.order_id, Math.round(v * 100) / 100);
+      }
+    }
+    return map;
   }
 
   async cancelOrder(userId: string, orderId: string) {
@@ -213,6 +268,9 @@ export class OrdersService {
         where: { id: order.stockId },
       });
       if (!stock) {
+        this.throwBusinessError('ORDER_NOT_CANCELLABLE');
+      }
+      if (order.orderType === OrderType.MAK) {
         this.throwBusinessError('ORDER_NOT_CANCELLABLE');
       }
       if (
