@@ -1,4 +1,5 @@
-export type OrderType = 'LO' | 'MAK' | 'ATO' | 'ATC';
+/** Loại lệnh đặt được trên form (ATO/ATC chưa hỗ trợ — xem UC 3.8). */
+export type OrderType = 'LO' | 'MAK';
 export type OrderSide = 'buy' | 'sell';
 export type BottomTab = 'orders' | 'watchlist' | 'conditional';
 export type OrderEntryTab = 'regular' | 'conditional';
@@ -22,6 +23,40 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
 export function formatOrderStatusLabel(status: string): string {
   return ORDER_STATUS_LABELS[status] ?? status;
 }
+
+export function parseOrderQuantityInput(raw: string): number {
+  const trimmed = raw.trim();
+  if (!trimmed) return 0;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}
+
+/** Lô chẵn HOSE/HNX: bội số 100, tối thiểu 100 CP. */
+export function isValidLotQuantity(qty: number): boolean {
+  return qty >= 100 && qty % 100 === 0;
+}
+
+export function formatVnd(amount: number): string {
+  return amount.toLocaleString('vi-VN', { maximumFractionDigits: 0 });
+}
+
+/** Ticket từ `POST .../orders/pre-check` — gửi lại khi create-order. */
+export type OrderPreCheckIntent = {
+  requestId: string;
+  transactionId: string;
+  tokenId: string;
+};
+
+/** Hiển thị modal xác nhận — lấy từ form, không từ pre-check. */
+export type OrderConfirmDisplay = {
+  symbol: string;
+  side: OrderSide;
+  orderType: OrderType;
+  quantity: number;
+  orderPrice: number;
+  estimatedTotal: number | null;
+};
 
 export function orderRemainingQty(quantity: number, matchedQty: number): number {
   return Math.max(0, quantity - matchedQty);

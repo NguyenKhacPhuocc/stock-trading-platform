@@ -14,11 +14,13 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
 import { WalletModule } from '../wallet/wallet.module';
+import { RedisModule } from '../../redis/redis.module';
 
 @Module({
   imports: [
     PassportModule,
     WalletModule,
+    RedisModule,
     TypeOrmModule.forFeature([
       User,
       CustomerProfile,

@@ -15,6 +15,8 @@ import type { AuthTokensPayload } from './auth.types';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenBodyDto } from './dto/refresh-token.dto';
+import { ForgotPasswordRequestDto } from './dto/forgot-password-request.dto';
+import { ForgotPasswordConfirmDto } from './dto/forgot-password-confirm.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User } from '../../database/entities/user.entity';
@@ -77,6 +79,18 @@ export class AuthController {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
     };
+  }
+
+  @Post('forgot-password/request')
+  @HttpCode(HttpStatus.OK)
+  requestPasswordReset(@Body() dto: ForgotPasswordRequestDto) {
+    return this.authService.requestPasswordReset(dto);
+  }
+
+  @Post('forgot-password/confirm')
+  @HttpCode(HttpStatus.OK)
+  confirmPasswordReset(@Body() dto: ForgotPasswordConfirmDto) {
+    return this.authService.confirmPasswordReset(dto);
   }
 
   @Post('logout')

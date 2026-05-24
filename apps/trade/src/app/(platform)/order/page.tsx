@@ -5,12 +5,24 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { OrderBookPanel } from '@/components/order/order-book-panel';
 import { OrderChartPanel } from '@/components/order/order-chart-panel';
+import { OrderConfirmDialog } from '@/components/order/order-confirm-dialog';
 import { OrderEntryPanel } from '@/components/order/order-entry-panel';
 import { OrderMainBottomPanel } from '@/components/order/order-main-bottom-panel';
 import { OrderTradeHistoryPanel } from '@/components/order/order-trade-history-panel';
-import type { BottomTab, OrderEntryTab, OrderSide, OrderType } from '@/components/order/order-types';
+import type {
+  BottomTab,
+  OrderEntryTab,
+  OrderPreCheckIntent,
+  OrderSide,
+  OrderType,
+} from '@/components/order/order-types';
+import {
+  formatOrderStatusLabel,
+  isValidLotQuantity,
+  parseOrderQuantityInput,
+} from '@/components/order/order-types';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { GATEWAY_ORDERS } from '@/lib/gateway-paths';
+import { GATEWAY_ORDERS, GATEWAY_WALLET } from '@/lib/gateway-paths';
 import { clearUser } from '@/store/slices/auth.slice';
 import { useOrderBookRealtime } from '@/hooks/use-order-book-realtime';
 import { useTradeRealtimeSocket } from '@/components/trade-realtime-provider';
@@ -81,6 +93,15 @@ export default function OrderPage() {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
+  const [sellableBySymbol, setSellableBySymbol] = useState<Record<string, number>>(
+    {},
+  );
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmIntent, setConfirmIntent] = useState<OrderPreCheckIntent | null>(
+    null,
+  );
+  const [isPreChecking, setIsPreChecking] = useState(false);
   /** Chưa gán mã từ session / mặc định — tránh WS `subscribe:i` mã đầu danh sách rồi mới đổi. */
   const [orderSymbolBootstrapped, setOrderSymbolBootstrapped] = useState(false);
   const redirectedUnauthRef = useRef(false);
@@ -134,14 +155,55 @@ export default function OrderPage() {
   const reloadOrdersRef = useRef(reloadOrders);
   reloadOrdersRef.current = reloadOrders;
 
+  const reloadPortfolio = useCallback(async () => {
+    if (isHydratingSession || !isAuthenticated) return;
+    try {
+      const res = await fetch(GATEWAY_WALLET.portfolio, {
+        credentials: 'same-origin',
+      });
+      if (res.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok || json?.s !== 'ok') return;
+      const d = json.d as
+        | {
+            availableBalance?: unknown;
+            positions?: Array<{ symbol?: unknown; quantity?: unknown }>;
+          }
+        | null
+        | undefined;
+      const avail = Number(d?.availableBalance);
+      setAvailableBalance(Number.isFinite(avail) ? avail : null);
+      const map: Record<string, number> = {};
+      for (const row of d?.positions ?? []) {
+        const sym =
+          typeof row?.symbol === 'string' ? row.symbol.trim().toUpperCase() : '';
+        if (!sym) continue;
+        const qty = Number(row.quantity);
+        map[sym] = Number.isFinite(qty) && qty > 0 ? qty : 0;
+      }
+      setSellableBySymbol(map);
+    } catch {
+      /* sức mua/bán phụ — không chặn đặt lệnh */
+    }
+  }, [handleSessionExpired, isAuthenticated, isHydratingSession]);
+
+  const reloadPortfolioRef = useRef(reloadPortfolio);
+  reloadPortfolioRef.current = reloadPortfolio;
+
   useEffect(() => {
     if (isHydratingSession || !isAuthenticated) {
       setOrders([]);
       setIsLoadingOrders(false);
+      setAvailableBalance(null);
+      setSellableBySymbol({});
       return;
     }
     void reloadOrders();
-  }, [isHydratingSession, isAuthenticated, reloadOrders]);
+    void reloadPortfolio();
+  }, [isHydratingSession, isAuthenticated, reloadOrders, reloadPortfolio]);
 
   useEffect(() => {
     if (!socket || !authUserId || !isAuthenticated) return;
@@ -149,8 +211,24 @@ export default function OrderPage() {
     const subscribeMe = () => {
       socket.emit('subscribe:me', { userId: authUserId });
     };
-    const onOrderMatched = () => {
+    const onOrderMatched = (payload: unknown) => {
       void reloadOrdersRef.current({ silent: true });
+      void reloadPortfolioRef.current();
+      if (payload && typeof payload === 'object') {
+        const p = payload as {
+          side?: string;
+          matchedQty?: number;
+          quantity?: number;
+          status?: string;
+        };
+        const sideLabel = p.side === 'sell' ? 'Bán' : 'Mua';
+        const matched = Number(p.matchedQty ?? 0);
+        const total = Number(p.quantity ?? 0);
+        const statusLabel = formatOrderStatusLabel(String(p.status ?? ''));
+        toast.success(
+          `Lệnh ${sideLabel}: khớp ${matched.toLocaleString('vi-VN')}/${total.toLocaleString('vi-VN')} — ${statusLabel}`,
+        );
+      }
     };
 
     socket.on('connect', subscribeMe);
@@ -194,18 +272,90 @@ export default function OrderPage() {
   const effectiveSymbol = orderSymbolBootstrapped
     ? symbol || (searchUniverse.length > 0 ? searchUniverse[0].symbol : '')
     : '';
+  const sellableQuantity = effectiveSymbol
+    ? (sellableBySymbol[effectiveSymbol.trim().toUpperCase()] ?? 0)
+    : null;
   const liveOrderBook = useOrderBookRealtime(effectiveSymbol);
   const isLo = orderType === 'LO';
   const isMak = orderType === 'MAK';
+  const qtyNum = parseOrderQuantityInput(quantity);
+  const quantityInvalid = quantity.trim().length > 0 && !isValidLotQuantity(qtyNum);
+  const symKeyForRow = effectiveSymbol.trim().toUpperCase();
+  const boardRow = symKeyForRow ? marketEntities[symKeyForRow] : undefined;
+  const unitPriceForEstimate = isLo
+    ? Number(price)
+    : orderSide === 'buy'
+      ? Number(boardRow?.ceil ?? 0)
+      : Number(boardRow?.floor ?? 0);
+  const estimatedTotal =
+    qtyNum > 0 && unitPriceForEstimate > 0 ? qtyNum * unitPriceForEstimate : null;
   const baseValid =
     Boolean(effectiveSymbol) &&
-    Number(quantity) > 0 &&
+    isValidLotQuantity(qtyNum) &&
     (isMak || (isLo && Number(price) > 0));
-  const canSubmit =
-    orderEntryTab === 'regular' ? baseValid : baseValid && Number(triggerPrice) > 0;
+  const canSubmit = orderEntryTab === 'regular' && baseValid;
 
-  const handleSubmitOrder = async () => {
+  const handleOpenConfirm = async () => {
+    if (!canSubmit || isSubmittingOrder || isPreChecking) return;
+    if (isHydratingSession || !isAuthenticated) {
+      toast.error('Phiên đăng nhập chưa sẵn sàng, vui lòng thử lại');
+      return;
+    }
+    const symKey = effectiveSymbol.trim().toUpperCase();
+    const fromQuotes = searchUniverse.find((u) => u.symbol === symKey);
+    const stockId = fromQuotes?.stockId ?? marketEntities[symKey]?.id;
+    if (!stockId) {
+      toast.error('Không tìm thấy mã chứng khoán');
+      return;
+    }
+
+    setIsPreChecking(true);
+    try {
+      const res = await fetch(GATEWAY_ORDERS.preCheck, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stockId,
+          side: orderSide,
+          orderType,
+          quantity: qtyNum,
+          ...(isLo ? { price: Number(price) } : {}),
+        }),
+      });
+      if (res.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok || json?.s !== 'ok') {
+        throw new Error(json?.em || 'Không kiểm tra được lệnh');
+      }
+      const intent = json.d as OrderPreCheckIntent;
+      if (
+        !intent?.requestId ||
+        !intent?.transactionId ||
+        !intent?.tokenId
+      ) {
+        throw new Error('Phản hồi kiểm tra lệnh không hợp lệ');
+      }
+      setConfirmIntent(intent);
+      setConfirmOpen(true);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Không kiểm tra được lệnh';
+      toast.error(message);
+    } finally {
+      setIsPreChecking(false);
+    }
+  };
+
+  const handleSubmitOrder = async (pin: string) => {
     if (!canSubmit || isSubmittingOrder) return;
+    if (!confirmIntent) {
+      toast.error('Vui lòng xác nhận lệnh qua bước kiểm tra trước');
+      return;
+    }
     if (isHydratingSession || !isAuthenticated) {
       toast.error('Phiên đăng nhập chưa sẵn sàng, vui lòng thử lại');
       return;
@@ -226,8 +376,12 @@ export default function OrderPage() {
         stockId,
         side: orderSide,
         orderType,
-        quantity: Number(quantity),
+        quantity: qtyNum,
         ...(isLo ? { price: Number(price) } : {}),
+        requestId: confirmIntent.requestId,
+        transactionId: confirmIntent.transactionId,
+        tokenId: confirmIntent.tokenId,
+        pin,
       };
       const idempotencyKey =
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -252,7 +406,10 @@ export default function OrderPage() {
       }
       setQuantity('');
       setPrice('');
+      setConfirmOpen(false);
+      setConfirmIntent(null);
       void reloadOrders({ silent: true });
+      void reloadPortfolio();
       toast.success('Đặt lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Đặt lệnh thất bại';
@@ -289,6 +446,7 @@ export default function OrderPage() {
         throw new Error(json?.em || 'Hủy lệnh thất bại');
       }
       void reloadOrders({ silent: true });
+      void reloadPortfolio();
       toast.success('Hủy lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Hủy lệnh thất bại';
@@ -334,10 +492,33 @@ export default function OrderPage() {
           triggerPrice={triggerPrice}
           onTriggerPriceChange={setTriggerPrice}
           canSubmit={canSubmit}
+          quantityInvalid={quantityInvalid}
+          availableBalance={orderSide === 'buy' ? availableBalance : null}
+          sellableQuantity={orderSide === 'sell' ? sellableQuantity : null}
+          estimatedTotal={estimatedTotal}
+          isPreChecking={isPreChecking}
           isSubmitting={isSubmittingOrder}
-          onSubmitOrder={handleSubmitOrder}
+          onOpenConfirm={() => void handleOpenConfirm()}
         />
       </div>
+
+      <OrderConfirmDialog
+        open={confirmOpen}
+        display={{
+          symbol: effectiveSymbol,
+          side: orderSide,
+          orderType,
+          quantity: qtyNum,
+          orderPrice: isLo ? Number(price) : unitPriceForEstimate,
+          estimatedTotal,
+        }}
+        isSubmitting={isSubmittingOrder}
+        onClose={() => {
+          setConfirmOpen(false);
+          setConfirmIntent(null);
+        }}
+        onConfirm={(pin) => void handleSubmitOrder(pin)}
+      />
 
       <section className="grid min-h-0 flex-1 grid-cols-1 gap-1 xl:grid-cols-[2.35fr_0.85fr_1fr]">
         <OrderMainBottomPanel

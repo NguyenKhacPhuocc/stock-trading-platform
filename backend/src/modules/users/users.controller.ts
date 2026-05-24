@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetupTradingPinDto } from './dto/setup-trading-pin.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('users')
@@ -34,5 +35,13 @@ export class UsersController {
     @Body() dto: ChangePasswordDto,
   ) {
     return this.users.changePassword(user.id, dto);
+  }
+
+  @Patch('me/trading-pin')
+  setupTradingPin(
+    @CurrentUser() user: { id: string },
+    @Body() dto: SetupTradingPinDto,
+  ) {
+    return this.users.setupTradingPin(user.id, dto);
   }
 }

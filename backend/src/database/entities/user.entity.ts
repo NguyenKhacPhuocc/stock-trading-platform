@@ -30,6 +30,10 @@ export class User {
   @Column({ name: 'password_hash' })
   passwordHash: string;
 
+  /** Mã PIN giao dịch (bcrypt) — thiết lập sau đăng nhập lần đầu. */
+  @Column({ name: 'trading_pin_hash', type: 'varchar', length: 255, nullable: true })
+  tradingPinHash: string | null;
+
   @Column({ name: 'full_name', length: 128 })
   fullName: string;
 

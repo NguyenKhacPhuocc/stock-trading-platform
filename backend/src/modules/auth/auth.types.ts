@@ -6,6 +6,8 @@ export interface AuthUserPublicDto {
   fullName: string;
   email: string | null;
   role: UserRole;
+  /** false → FE bắt buộc modal thiết lập PIN. */
+  hasTradingPin: boolean;
 }
 
 /** Session tối thiểu — danh sách tiểu khoản lấy qua GET /users/me/accounts */

@@ -10,10 +10,13 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { Trade } from '../../database/entities/trade.entity';
+import { User } from '../../database/entities/user.entity';
 import { MatchingModule } from '../matching/matching.module';
+import { RedisModule } from '../../redis/redis.module';
 
 @Module({
   imports: [
+    RedisModule,
     TypeOrmModule.forFeature([
       Order,
       Trade,
@@ -23,6 +26,7 @@ import { MatchingModule } from '../matching/matching.module';
       Wallet,
       Position,
       CashTransaction,
+      User,
     ]),
     forwardRef(() => MatchingModule),
   ],

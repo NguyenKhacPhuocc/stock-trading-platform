@@ -28,12 +28,21 @@ import { WalletService } from '../wallet/wallet.service';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordRequestDto } from './dto/forgot-password-request.dto';
+import { ForgotPasswordConfirmDto } from './dto/forgot-password-confirm.dto';
+import { RedisService } from '../../redis/redis.service';
+import {
+  authPasswordResetCooldownKey,
+  authPasswordResetKey,
+  CacheTtl,
+} from '../../common/const/cache-keys';
+import { randomInt, timingSafeEqual } from 'crypto';
 import {
   generateOpaqueRefreshToken,
   hashRefreshToken,
   ttlToMs,
 } from './auth-token.util';
-import type { AuthTokensPayload } from './auth.types';
+import type { AuthTokensPayload, AuthUserPublicDto } from './auth.types';
 import { BusinessException } from '../../common/errors/business.exception';
 
 @Injectable()
@@ -55,7 +64,10 @@ export class AuthService {
     private dataSource: DataSource,
     private config: ConfigService,
     private walletService: WalletService,
+    private redis: RedisService,
   ) {}
+
+  private static readonly OTP_LENGTH = 6;
 
   async register(dto: RegisterDto) {
     const profileDateOfBirth: string | null = dto.dateOfBirth ?? null;
@@ -216,13 +228,18 @@ export class AuthService {
   /** Payload /auth/me — chỉ user; FE gọi GET /users/me/accounts cho tiểu khoản */
   getSessionForUser(user: User) {
     return {
-      user: {
-        id: user.id,
-        custId: user.custId,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-      },
+      user: this.toAuthUserPublic(user),
+    };
+  }
+
+  toAuthUserPublic(user: User): AuthUserPublicDto {
+    return {
+      id: user.id,
+      custId: user.custId,
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      hasTradingPin: Boolean(user.tradingPinHash),
     };
   }
 
@@ -253,13 +270,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken: plainRefresh,
-      user: {
-        id: user.id,
-        custId: user.custId,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-      },
+      user: this.toAuthUserPublic(user),
     };
   }
 
@@ -312,6 +323,110 @@ export class AuthService {
       { tokenHash, revokedAt: IsNull() },
       { revokedAt: new Date() },
     );
+  }
+
+  /**
+   * Yêu cầu OTP quên MK — lưu Redis. Bản mô phỏng: trả `simulatedOtp` (sau gắn email thật).
+   */
+  async requestPasswordReset(dto: ForgotPasswordRequestDto) {
+    const custId = dto.custId.trim().toUpperCase();
+    const email = dto.email.trim().toLowerCase();
+
+    const cooldown = await this.redis.get(authPasswordResetCooldownKey(custId));
+    if (cooldown) {
+      throw new BusinessException('AUTH_FORGOT_TOO_MANY_REQUESTS');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { custId },
+      select: ['id', 'custId', 'email', 'isActive'],
+    });
+    if (!user?.isActive) {
+      return {
+        message:
+          'Nếu thông tin hợp lệ, mã xác thực đã được tạo (kiểm tra email hoặc hướng dẫn mô phỏng).',
+      };
+    }
+
+    const userEmail = user.email?.trim().toLowerCase();
+    if (!userEmail) {
+      throw new BusinessException('AUTH_FORGOT_NO_EMAIL');
+    }
+    if (userEmail !== email) {
+      throw new BusinessException('AUTH_FORGOT_EMAIL_MISMATCH');
+    }
+
+    const otp = String(
+      randomInt(0, 10 ** AuthService.OTP_LENGTH),
+    ).padStart(AuthService.OTP_LENGTH, '0');
+
+    const payload = JSON.stringify({ otp, email, userId: user.id });
+    await this.redis.set(
+      authPasswordResetKey(custId),
+      payload,
+      CacheTtl.PASSWORD_RESET_OTP,
+    );
+    await this.redis.set(
+      authPasswordResetCooldownKey(custId),
+      '1',
+      CacheTtl.PASSWORD_RESET_COOLDOWN,
+    );
+
+    const simulateOtp =
+      this.config.get<string>('AUTH_SIMULATE_OTP') !== 'false' &&
+      process.env.NODE_ENV !== 'production';
+
+    return {
+      message: simulateOtp
+        ? 'Mã OTP mô phỏng (không gửi email). Dùng mã bên dưới để đặt lại mật khẩu.'
+        : 'Mã xác thực đã được gửi tới email đăng ký.',
+      ...(simulateOtp ? { simulatedOtp: otp } : {}),
+    };
+  }
+
+  async confirmPasswordReset(dto: ForgotPasswordConfirmDto) {
+    const custId = dto.custId.trim().toUpperCase();
+    const email = dto.email.trim().toLowerCase();
+    const otp = dto.otp.trim();
+
+    const raw = await this.redis.get(authPasswordResetKey(custId));
+    if (!raw) {
+      throw new BusinessException('AUTH_FORGOT_OTP_EXPIRED');
+    }
+
+    let stored: { otp: string; email: string; userId: string };
+    try {
+      stored = JSON.parse(raw) as { otp: string; email: string; userId: string };
+    } catch {
+      throw new BusinessException('AUTH_FORGOT_OTP_EXPIRED');
+    }
+
+    if (stored.email !== email) {
+      throw new BusinessException('AUTH_FORGOT_EMAIL_MISMATCH');
+    }
+
+    const a = Buffer.from(stored.otp, 'utf8');
+    const b = Buffer.from(otp, 'utf8');
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new BusinessException('AUTH_FORGOT_OTP_INVALID');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { id: stored.userId, custId },
+    });
+    if (!user?.isActive) {
+      throw new BusinessException('AUTH_FORGOT_OTP_EXPIRED');
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.userRepo.update(user.id, { passwordHash: newHash });
+    await this.refreshRepo.update(
+      { userId: user.id, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+    await this.redis.del(authPasswordResetKey(custId));
+
+    return { message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại.' };
   }
 
   private async getConfigValue(key: string, fallback: string): Promise<string> {

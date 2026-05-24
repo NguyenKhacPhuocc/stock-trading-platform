@@ -1,4 +1,5 @@
 import type { OrderEntryTab, OrderSide, OrderType, SymbolOption } from './order-types';
+import { formatVnd } from './order-types';
 
 type OrderEntryPanelProps = {
   panelCardClassName: string;
@@ -23,8 +24,13 @@ type OrderEntryPanelProps = {
   triggerPrice: string;
   onTriggerPriceChange: (value: string) => void;
   canSubmit: boolean;
+  quantityInvalid?: boolean;
+  availableBalance?: number | null;
+  sellableQuantity?: number | null;
+  estimatedTotal?: number | null;
+  isPreChecking?: boolean;
   isSubmitting?: boolean;
-  onSubmitOrder: () => void;
+  onOpenConfirm: () => void;
 };
 
 export function OrderEntryPanel({
@@ -50,9 +56,17 @@ export function OrderEntryPanel({
   triggerPrice,
   onTriggerPriceChange,
   canSubmit,
+  quantityInvalid = false,
+  availableBalance = null,
+  sellableQuantity = null,
+  estimatedTotal = null,
+  isPreChecking = false,
   isSubmitting = false,
-  onSubmitOrder,
+  onOpenConfirm,
 }: OrderEntryPanelProps) {
+  const isConditional = orderEntryTab === 'conditional';
+  const busy = isPreChecking || isSubmitting;
+  const submitEnabled = canSubmit && !isConditional && !busy;
   return (
     <section className={`${panelCardClassName} min-h-[260px]`}>
       <div className="flex items-center gap-4 border-b border-border px-3 text-xs">
@@ -120,15 +134,40 @@ export function OrderEntryPanel({
           </button>
         </div>
 
+        {orderSide === 'buy' && (
+          <div className="flex min-h-[18px] justify-between text-[11px] text-muted">
+            <span>Sức mua (tiền khả dụng)</span>
+            <span className="font-medium text-foreground">
+              {availableBalance != null ? `${formatVnd(availableBalance)} đ` : '—'}
+            </span>
+          </div>
+        )}
+
+        {orderSide === 'sell' && (
+          <div className="flex min-h-[18px] justify-between text-[11px] text-muted">
+            <span>Sức bán (cổ phiếu sở hữu)</span>
+            <span className="font-medium text-foreground">
+              {sellableQuantity != null
+                ? sellableQuantity.toLocaleString('vi-VN')
+                : '—'}
+            </span>
+          </div>
+        )}
+
         <div>
           <p className="mb-1 text-[11px] text-muted">Khối lượng (bội số 100)</p>
           <input
             value={quantity}
-            onChange={(e) => onQuantityChange(e.target.value)}
+            onChange={(e) => onQuantityChange(e.target.value.replace(/\D/g, ''))}
             placeholder="0"
             inputMode="numeric"
-            className="w-full rounded border border-border bg-[#11141b] px-2 py-1.5 text-xs outline-none"
+            className={`w-full rounded border bg-[#11141b] px-2 py-1.5 text-xs outline-none ${quantityInvalid ? 'border-price-down' : 'border-border'}`}
           />
+          {quantityInvalid && (
+            <p className="mt-1 text-[11px] text-price-down">
+              Khối lượng phải là bội số của 100 (tối thiểu 100 cổ phiếu)
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-[100px_1fr] gap-2">
@@ -139,8 +178,6 @@ export function OrderEntryPanel({
           >
             <option value="LO">LO</option>
             <option value="MAK">MAK</option>
-            <option value="ATO">ATO</option>
-            <option value="ATC">ATC</option>
           </select>
           <input
             value={price}
@@ -154,8 +191,25 @@ export function OrderEntryPanel({
           />
         </div>
 
+        {orderEntryTab === 'regular' && (
+          <div className="flex min-h-[18px] justify-between text-[11px] text-muted">
+            <span>Tổng tiền dự kiến</span>
+            <span className="font-medium text-foreground">
+              {estimatedTotal != null && estimatedTotal > 0
+                ? `${formatVnd(estimatedTotal)} đ`
+                : '—'}
+            </span>
+          </div>
+        )}
+
         {orderEntryTab === 'conditional' && (
-          <div className="grid grid-cols-[100px_1fr] gap-2">
+          <p className="text-[11px] text-muted">
+            Lệnh điều kiện chưa hỗ trợ — vui lòng dùng tab Lệnh thường.
+          </p>
+        )}
+
+        {orderEntryTab === 'conditional' && (
+          <div className="grid grid-cols-[100px_1fr] gap-2 opacity-50 pointer-events-none">
             <select
               value={triggerOperator}
               onChange={(e) => onTriggerOperatorChange(e.target.value as 'gte' | 'lte')}
@@ -176,17 +230,19 @@ export function OrderEntryPanel({
 
         <button
           type="button"
-          disabled={!canSubmit || isSubmitting}
-          onClick={onSubmitOrder}
+          disabled={!submitEnabled}
+          onClick={onOpenConfirm}
           className="w-full rounded bg-primary py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isSubmitting
-            ? 'Đang gửi lệnh...'
-            : orderEntryTab === 'regular'
-            ? orderSide === 'buy'
-              ? 'Xác nhận mua'
-              : 'Xác nhận bán'
-            : 'Tạo lệnh điều kiện'}
+          {isPreChecking
+            ? 'Đang kiểm tra...'
+            : isSubmitting
+              ? 'Đang gửi lệnh...'
+              : isConditional
+              ? 'Chưa hỗ trợ'
+              : orderSide === 'buy'
+                ? 'Xác nhận mua'
+                : 'Xác nhận bán'}
         </button>
       </div>
     </section>

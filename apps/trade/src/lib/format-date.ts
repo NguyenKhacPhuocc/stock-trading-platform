@@ -17,6 +17,21 @@ export function formatTimeHHmmss(isoString: string | Date): string {
 /**
  * Format ISO timestamp sang DD/MM HH:mm
  */
+/** Ngày sinh / date-only: DD/MM/YYYY */
+export function formatDateOnly(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  try {
+    const date = typeof value === 'string' ? new Date(value) : value;
+    if (isNaN(date.getTime())) return '—';
+    const d = String(date.getDate()).padStart(2, '0');
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const y = date.getFullYear();
+    return `${d}/${m}/${y}`;
+  } catch {
+    return '—';
+  }
+}
+
 export function formatDateTimeCompact(isoString: string | Date): string {
   try {
     const date = typeof isoString === 'string' ? new Date(isoString) : isoString;

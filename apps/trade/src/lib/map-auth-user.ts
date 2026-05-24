@@ -7,6 +7,7 @@ const authUserApiSchema = z.object({
   fullName: z.string(),
   email: z.union([z.string(), z.null()]).optional(),
   role: z.string().transform((r) => (r === 'admin' ? 'admin' : 'user')),
+  hasTradingPin: z.boolean().optional(),
 });
 
 export function mapAuthUserPayload(raw: unknown): AuthUser | null {
@@ -19,5 +20,6 @@ export function mapAuthUserPayload(raw: unknown): AuthUser | null {
     fullName: d.fullName,
     email: d.email ?? null,
     role: d.role,
+    hasTradingPin: d.hasTradingPin === true,
   };
 }

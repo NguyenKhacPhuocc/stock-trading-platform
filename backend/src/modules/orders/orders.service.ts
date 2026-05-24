@@ -3,8 +3,10 @@ import {
   Logger,
   InternalServerErrorException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { Order } from '../../database/entities/order.entity';
 import { Trade } from '../../database/entities/trade.entity';
 import { OrderType, OrderStatus, OrderSide, TransactionType } from '../../common/const';
@@ -12,14 +14,24 @@ import { Stock } from '../../database/entities/stock.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { User } from '../../database/entities/user.entity';
 import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { PreCheckOrderDto } from './dto/pre-check-order.dto';
+import type { PreCheckOrderResult } from './dto/pre-check-order-result.dto';
 import { MatchingService } from '../matching/matching.service';
 import { formatCreateOrder, orderRef } from '../matching/util/order-flow-log.util';
 import { BusinessException } from '../../common/errors/business.exception';
 import type { AppErrorKey } from '../../common/errors/error-const';
 import { isMakOrderType, resolveMakLimitPrice } from './util/mak-order.util';
+import { RedisService } from '../../redis/redis.service';
+import { CacheTtl } from '../../common/const/cache-keys';
+import {
+  orderIntentByTokenKey,
+  orderIntentByTxKey,
+  type StoredOrderIntent,
+} from './util/order-intent.util';
 
 /**
  * Đặt / hủy lệnh — ghi DB + khóa tài sản, rồi đẩy job khớp.
@@ -37,9 +49,43 @@ export class OrdersService {
     private snapshotRepo: Repository<StockBoardSnapshot>,
     @InjectRepository(TradingAccount)
     private accountRepo: Repository<TradingAccount>,
+    @InjectRepository(Wallet) private walletRepo: Repository<Wallet>,
+    @InjectRepository(Position) private positionRepo: Repository<Position>,
+    @InjectRepository(User) private userRepo: Repository<User>,
     private readonly matching: MatchingService,
+    private readonly redis: RedisService,
     private dataSource: DataSource,
   ) {}
+
+  /** Kiểm tra nghiệp vụ + tính giá/tổng tiền — không khóa tài sản, không INSERT lệnh. */
+  async preCheckOrder(
+    userId: string,
+    dto: PreCheckOrderDto,
+  ): Promise<PreCheckOrderResult> {
+    const draft = await this.resolveOrderDraft(userId, dto);
+    const requestId = randomUUID();
+    const transactionId = randomUUID();
+    const tokenId = randomUUID().replace(/-/g, '');
+
+    const intent: StoredOrderIntent = {
+      userId,
+      tradingAccountId: draft.account.id,
+      stockId: dto.stockId,
+      side: dto.side,
+      orderType: dto.orderType,
+      quantity: dto.quantity,
+      orderPrice: draft.orderPrice,
+      requestId,
+      tokenId,
+      transactionId,
+    };
+    const payload = JSON.stringify(intent);
+    const ttl = CacheTtl.ORDER_INTENT;
+    await this.redis.set(orderIntentByTxKey(transactionId), payload, ttl);
+    await this.redis.set(orderIntentByTokenKey(tokenId), transactionId, ttl);
+
+    return { requestId, transactionId, tokenId };
+  }
 
   private async getDefaultAccount(userId: string): Promise<TradingAccount> {
     const account = await this.accountRepo.findOne({
@@ -52,45 +98,18 @@ export class OrdersService {
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
-    const isLo = dto.orderType === OrderType.LO;
+    await this.verifyTradingPin(userId, dto.pin);
+    await this.consumeOrderIntent(userId, dto);
+    const draft = await this.resolveOrderDraft(userId, dto);
+    const { account, symbol: sym, orderPrice } = draft;
     const isMak = isMakOrderType(dto.orderType);
-    if (!isLo && !isMak) {
-      this.throwBusinessError('ORDER_TYPE_NOT_SUPPORTED');
-    }
-    if (dto.quantity % 100 !== 0) {
-      this.throwBusinessError('INVALID_QUANTITY_LOT');
-    }
-    if (isLo && (!dto.price || dto.price <= 0)) {
-      this.throwBusinessError('INVALID_PRICE');
-    }
+    const estimatedCost = draft.estimatedTotal;
 
-    const account = await this.getDefaultAccount(userId);
     const existing = await this.orderRepo.findOne({
       where: { tradingAccountId: account.id, clientOrderId: dto.clientOrderId },
     });
     if (existing) return existing;
 
-    const stock = await this.stockRepo.findOne({ where: { id: dto.stockId } });
-    if (!stock) {
-      this.throwBusinessError('STOCK_NOT_FOUND');
-    }
-
-    const snap = await this.snapshotRepo.findOne({
-      where: { stockId: stock.id },
-      order: { tradingDate: 'DESC', updatedAt: 'DESC' },
-    });
-    if (!snap) {
-      this.throwBusinessError('MISSING_REFERENCE_PRICE');
-    }
-    const floor = Number(snap.floorPrice);
-    const ceiling = Number(snap.ceilingPrice);
-
-    const orderPrice = isMak
-      ? resolveMakLimitPrice(dto.side, floor, ceiling)
-      : Number(dto.price);
-    await this.checkAmplitude(stock.id, orderPrice);
-
-    const sym = stock.symbol.toUpperCase();
     this.logger.log(
       `[order-flow] ${formatCreateOrder(dto.side, dto.quantity, sym, orderPrice)}${isMak ? ' MAK' : ''} | account=${account.accountId}`,
     );
@@ -107,7 +126,6 @@ export class OrdersService {
             if (!wallet) {
               this.throwBusinessError('WALLET_NOT_FOUND', undefined, 404);
             }
-            const estimatedCost = Number(orderPrice) * Number(dto.quantity);
             const available = Number(wallet.availableBalance);
             if (available < estimatedCost) {
               this.throwBusinessError('INSUFFICIENT_BALANCE');
@@ -342,6 +360,138 @@ export class OrdersService {
         this.logger.error(`[order-flow] enqueue cancel failed: ${String(e)}`),
       );
     return saved;
+  }
+
+  private async verifyTradingPin(userId: string, pin: string): Promise<void> {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'tradingPinHash'],
+    });
+    if (!user?.tradingPinHash) {
+      this.throwBusinessError('TRADING_PIN_NOT_SET');
+    }
+    const valid = await bcrypt.compare(pin, user.tradingPinHash);
+    if (!valid) {
+      this.throwBusinessError('TRADING_PIN_INVALID');
+    }
+  }
+
+  private async consumeOrderIntent(
+    userId: string,
+    dto: CreateOrderDto,
+  ): Promise<StoredOrderIntent> {
+    const raw = await this.redis.get(orderIntentByTxKey(dto.transactionId));
+    if (!raw) {
+      this.throwBusinessError('ORDER_INTENT_EXPIRED');
+    }
+
+    let intent: StoredOrderIntent;
+    try {
+      intent = JSON.parse(raw) as StoredOrderIntent;
+    } catch {
+      this.throwBusinessError('ORDER_INTENT_INVALID');
+    }
+
+    if (
+      intent.userId !== userId ||
+      intent.tokenId !== dto.tokenId ||
+      intent.requestId !== dto.requestId
+    ) {
+      this.throwBusinessError('ORDER_INTENT_INVALID');
+    }
+
+    const isLo = dto.orderType === OrderType.LO;
+    const priceOk =
+      !isLo || (dto.price != null && Number(dto.price) === intent.orderPrice);
+    if (
+      intent.stockId !== dto.stockId ||
+      intent.side !== dto.side ||
+      intent.orderType !== dto.orderType ||
+      intent.quantity !== dto.quantity ||
+      !priceOk
+    ) {
+      this.throwBusinessError('ORDER_INTENT_MISMATCH');
+    }
+
+    await this.redis.del(orderIntentByTxKey(dto.transactionId));
+    await this.redis.del(orderIntentByTokenKey(dto.tokenId));
+    return intent;
+  }
+
+  private async resolveOrderDraft(userId: string, dto: PreCheckOrderDto) {
+    const isLo = dto.orderType === OrderType.LO;
+    const isMak = isMakOrderType(dto.orderType);
+    if (!isLo && !isMak) {
+      this.throwBusinessError('ORDER_TYPE_NOT_SUPPORTED', {
+        orderType: dto.orderType,
+      });
+    }
+    if (dto.quantity % 100 !== 0) {
+      this.throwBusinessError('INVALID_QUANTITY_LOT');
+    }
+    if (isLo && (!dto.price || dto.price <= 0)) {
+      this.throwBusinessError('INVALID_PRICE');
+    }
+
+    const account = await this.getDefaultAccount(userId);
+    const stock = await this.stockRepo.findOne({ where: { id: dto.stockId } });
+    if (!stock) {
+      this.throwBusinessError('STOCK_NOT_FOUND');
+    }
+
+    const snap = await this.snapshotRepo.findOne({
+      where: { stockId: stock.id },
+      order: { tradingDate: 'DESC', updatedAt: 'DESC' },
+    });
+    if (!snap) {
+      this.throwBusinessError('MISSING_REFERENCE_PRICE');
+    }
+    const floor = Number(snap.floorPrice);
+    const ceiling = Number(snap.ceilingPrice);
+
+    const orderPrice = isMak
+      ? resolveMakLimitPrice(dto.side, floor, ceiling)
+      : Number(dto.price);
+    await this.checkAmplitude(stock.id, orderPrice);
+
+    const estimatedTotal = Number(orderPrice) * Number(dto.quantity);
+    let availableBalance: number | null = null;
+    let sellableQuantity: number | null = null;
+
+    if (dto.side === OrderSide.BUY) {
+      const wallet = await this.walletRepo.findOne({
+        where: { tradingAccountId: account.id },
+      });
+      if (!wallet) {
+        this.throwBusinessError('WALLET_NOT_FOUND', undefined, 404);
+      }
+      const available = Number(wallet.availableBalance);
+      availableBalance = available;
+      if (available < estimatedTotal) {
+        this.throwBusinessError('INSUFFICIENT_BALANCE');
+      }
+    } else {
+      const position = await this.positionRepo.findOne({
+        where: { tradingAccountId: account.id, stockId: dto.stockId },
+      });
+      const availableQty = position ? Number(position.quantity) : 0;
+      sellableQuantity = availableQty;
+      if (availableQty < Number(dto.quantity)) {
+        this.throwBusinessError('INSUFFICIENT_SELLABLE_QTY');
+      }
+    }
+
+    return {
+      account,
+      stock,
+      symbol: stock.symbol.toUpperCase(),
+      orderPrice,
+      floor,
+      ceiling,
+      estimatedTotal,
+      availableBalance,
+      sellableQuantity,
+    };
   }
 
   private async checkAmplitude(stockId: string, price: number) {

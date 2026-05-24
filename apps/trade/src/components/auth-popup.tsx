@@ -2,6 +2,7 @@
 
 import { X, Eye, EyeOff, QrCode, ChevronDown } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { Tooltip } from '@/components/tooltip';
 import { useRouter } from 'next/navigation';
 import { useAppDispatch } from '@/store/hooks';
@@ -43,26 +44,50 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
   const router = useRouter();
   const dispatch = useAppDispatch();
 
-  const [currentMode, setCurrentMode] = useState<'login' | 'register'>(mode);
+  const [currentMode, setCurrentMode] = useState<'login' | 'register' | 'forgot'>(mode);
+  const [forgotStep, setForgotStep] = useState<'request' | 'confirm'>('request');
   const [loginForm, setLoginForm] = useState<{ custId: string; password: string }>({
     custId: APP_CONFIG.brokerCode,
     password: '',
   });
+  const [forgotForm, setForgotForm] = useState({
+    custId: APP_CONFIG.brokerCode,
+    email: '',
+    otp: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const [simulatedOtp, setSimulatedOtp] = useState<string | null>(null);
   const [registerForm, setRegisterForm] = useState(emptyRegister);
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [registerDone, setRegisterDone] = useState<RegisterDone | null>(null);
   const [copied, setCopied] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showRegPassword, setShowRegPassword] = useState(false);
+  const [showForgotNewPassword, setShowForgotNewPassword] = useState(false);
+  const [qrHintOpen, setQrHintOpen] = useState(false);
 
   function switchMode(m: 'login' | 'register') {
     setCurrentMode(m);
-    setError('');
-    // Khi đổi tab phải quay lại form tương ứng, không giữ màn hình "đăng ký thành công".
+    setForgotStep('request');
+    setSimulatedOtp(null);
     setRegisterDone(null);
     setCopied(false);
+    setQrHintOpen(false);
     onSwitchMode?.(m);
+  }
+
+  function openForgotPassword() {
+    setForgotForm((f) => ({
+      ...f,
+      custId: loginForm.custId,
+      otp: '',
+      newPassword: '',
+      confirmPassword: '',
+    }));
+    setForgotStep('request');
+    setSimulatedOtp(null);
+    setCurrentMode('forgot');
   }
 
   async function handleCopy(text: string) {
@@ -82,9 +107,70 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
     onClose();
   }
 
+  async function handleForgotRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await bffClient.post(GATEWAY_AUTH.forgotPasswordRequest, {
+        custId: forgotForm.custId,
+        email: forgotForm.email,
+      });
+      if (res.data?.s !== 'ok') {
+        throw new Error(res.data?.em || 'Không gửi được yêu cầu');
+      }
+      const d = res.data.d as { message?: string; simulatedOtp?: string } | null;
+      setSimulatedOtp(d?.simulatedOtp ?? null);
+      setForgotStep('confirm');
+      toast.success(d?.message || 'Đã tạo mã xác thực');
+    } catch (err: unknown) {
+      const errData = (err as { response?: { data?: { em?: string } } })?.response?.data;
+      toast.error(errData?.em ?? (err as Error)?.message ?? 'Không gửi được yêu cầu');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleForgotConfirm(e: React.FormEvent) {
+    e.preventDefault();
+    if (forgotForm.newPassword.length < 6) {
+      toast.error('Mật khẩu mới tối thiểu 6 ký tự');
+      return;
+    }
+    if (forgotForm.newPassword !== forgotForm.confirmPassword) {
+      toast.error('Mật khẩu xác nhận không khớp');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await bffClient.post(GATEWAY_AUTH.forgotPasswordConfirm, {
+        custId: forgotForm.custId,
+        email: forgotForm.email,
+        otp: forgotForm.otp,
+        newPassword: forgotForm.newPassword,
+      });
+      if (res.data?.s !== 'ok') {
+        throw new Error(res.data?.em || 'Không đặt lại được mật khẩu');
+      }
+      toast.success(
+        (res.data.d as { message?: string })?.message || 'Đặt lại mật khẩu thành công',
+      );
+      setLoginForm({ custId: forgotForm.custId.toUpperCase(), password: '' });
+      switchMode('login');
+    } catch (err: unknown) {
+      const errData = (err as { response?: { data?: { em?: string } } })?.response?.data;
+      toast.error(errData?.em ?? (err as Error)?.message ?? 'Không đặt lại được mật khẩu');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
+    if (currentMode === 'forgot') {
+      if (forgotStep === 'request') await handleForgotRequest(e);
+      else await handleForgotConfirm(e);
+      return;
+    }
     setLoading(true);
     try {
       if (currentMode === 'login') {
@@ -124,7 +210,9 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
       const errData = (err as { response?: { data?: { em?: string; message?: string } } })?.response
         ?.data;
       const msg = errData?.em ?? errData?.message ?? (err as Error)?.message;
-      setError(msg || (currentMode === 'login' ? 'Đăng nhập thất bại' : 'Đăng ký thất bại'));
+      toast.error(
+        msg || (currentMode === 'login' ? 'Đăng nhập thất bại' : 'Đăng ký thất bại'),
+      );
     } finally {
       setLoading(false);
     }
@@ -162,23 +250,36 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-col">
-            <div className="mb-4 flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => switchMode('login')}
-                className={`cursor-pointer border-b-2 px-1 pb-1 text-sm font-semibold transition-colors ${currentMode === 'login' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}
-              >
-                Đăng nhập
-              </button>
-              <span className="mx-1 text-muted">|</span>
-              <button
-                type="button"
-                onClick={() => switchMode('register')}
-                className={`cursor-pointer border-b-2 px-1 pb-1 text-sm font-semibold transition-colors ${currentMode === 'register' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}
-              >
-                Mở tài khoản
-              </button>
-            </div>
+            {currentMode === 'forgot' ? (
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-foreground">Quên mật khẩu</h2>
+                <button
+                  type="button"
+                  onClick={() => switchMode('login')}
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                >
+                  ← Đăng nhập
+                </button>
+              </div>
+            ) : (
+              <div className="mb-4 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => switchMode('login')}
+                  className={`cursor-pointer border-b-2 px-1 pb-1 text-sm font-semibold transition-colors ${currentMode === 'login' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}
+                >
+                  Đăng nhập
+                </button>
+                <span className="mx-1 text-muted">|</span>
+                <button
+                  type="button"
+                  onClick={() => switchMode('register')}
+                  className={`cursor-pointer border-b-2 px-1 pb-1 text-sm font-semibold transition-colors ${currentMode === 'register' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}
+                >
+                  Mở tài khoản
+                </button>
+              </div>
+            )}
 
             <div className="min-h-0 flex-1 overflow-y-auto pr-1">
               {registerDone ? (
@@ -232,10 +333,125 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleSubmit} className="space-y-3">
-                  {currentMode === 'login' ? (
+                <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
+                  {currentMode === 'forgot' ? (
+                    forgotStep === 'request' ? (
+                      <>
+                        <p className="text-xs text-muted">
+                          Nhập mã khách hàng và email đã đăng ký. Hệ thống mô phỏng sẽ hiển thị mã
+                          OTP (bản thật gửi qua email).
+                        </p>
+                        <Field label="Mã tài khoản">
+                          <input
+                            type="text"
+                            required
+                            value={forgotForm.custId}
+                            onChange={(e) =>
+                              setForgotForm({ ...forgotForm, custId: e.target.value.toUpperCase() })
+                            }
+                            className="w-full px-3 py-2 rounded border border-border text-sm outline-none bg-surface-2 text-foreground"
+                          />
+                        </Field>
+                        <Field label="Email đăng ký">
+                          <input
+                            type="email"
+                            required
+                            placeholder="example@gmail.com"
+                            value={forgotForm.email}
+                            onChange={(e) =>
+                              setForgotForm({ ...forgotForm, email: e.target.value })
+                            }
+                            className="w-full px-3 py-2 rounded border border-border text-sm outline-none bg-surface-2 text-foreground"
+                          />
+                        </Field>
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="w-full py-2.5 rounded font-medium text-sm bg-primary text-white disabled:opacity-60"
+                        >
+                          {loading ? 'Đang gửi...' : 'Gửi mã xác thực'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {simulatedOtp ? (
+                          <div className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-3 text-center">
+                            <p className="text-xs text-muted">Mã OTP mô phỏng</p>
+                            <p className="mt-1 font-mono text-2xl font-bold tracking-[0.3em] text-primary">
+                              {simulatedOtp}
+                            </p>
+                          </div>
+                        ) : null}
+                        <Field label="Mã OTP (6 số)">
+                          <input
+                            type="text"
+                            required
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={forgotForm.otp}
+                            onChange={(e) =>
+                              setForgotForm({
+                                ...forgotForm,
+                                otp: e.target.value.replace(/\D/g, '').slice(0, 6),
+                              })
+                            }
+                            className="w-full px-3 py-2 rounded border border-border text-sm outline-none bg-surface-2 text-foreground font-mono tracking-widest"
+                          />
+                        </Field>
+                        <Field label="Mật khẩu mới">
+                          <div className="relative">
+                            <input
+                              type={showForgotNewPassword ? 'text' : 'password'}
+                              required
+                              minLength={6}
+                              value={forgotForm.newPassword}
+                              onChange={(e) =>
+                                setForgotForm({ ...forgotForm, newPassword: e.target.value })
+                              }
+                              className="w-full px-3 py-2 pr-10 rounded border border-border text-sm outline-none bg-surface-2 text-foreground"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowForgotNewPassword((v) => !v)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted cursor-pointer"
+                            >
+                              {showForgotNewPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                            </button>
+                          </div>
+                        </Field>
+                        <Field label="Xác nhận mật khẩu mới">
+                          <input
+                            type="password"
+                            required
+                            value={forgotForm.confirmPassword}
+                            onChange={(e) =>
+                              setForgotForm({ ...forgotForm, confirmPassword: e.target.value })
+                            }
+                            className="w-full px-3 py-2 rounded border border-border text-sm outline-none bg-surface-2 text-foreground"
+                          />
+                        </Field>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={loading}
+                            onClick={() => setForgotStep('request')}
+                            className="flex-1 py-2.5 rounded text-sm border border-border text-muted hover:text-foreground"
+                          >
+                            Quay lại
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={loading}
+                            className="flex-[2] py-2.5 rounded font-medium text-sm bg-primary text-white disabled:opacity-60"
+                          >
+                            {loading ? 'Đang lưu...' : 'Đặt lại mật khẩu'}
+                          </button>
+                        </div>
+                      </>
+                    )
+                  ) : currentMode === 'login' ? (
                     <>
-                      <Field label="CustId (mã khách)">
+                      <Field label="Mã tài khoản">
                         <input
                           type="text"
                           required
@@ -266,7 +482,11 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
                       </Field>
 
                       <div className="flex justify-end">
-                        <button type="button" className="text-xs text-primary hover:underline cursor-pointer">
+                        <button
+                          type="button"
+                          onClick={openForgotPassword}
+                          className="text-xs text-primary hover:underline cursor-pointer"
+                        >
                           Quên mật khẩu?
                         </button>
                       </div>
@@ -366,17 +586,15 @@ export default function AuthPopup({ mode, onClose, onSwitchMode }: AuthPopupProp
                     </>
                   )}
 
-                  {error && (
-                    <p className="text-xs text-center text-price-down">{error}</p>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full py-2.5 rounded font-medium text-sm transition-opacity disabled:opacity-60 bg-primary text-white"
-                  >
-                    {loading ? 'Đang xử lý...' : currentMode === 'login' ? 'Đăng nhập' : 'Đăng ký'}
-                  </button>
+                  {currentMode !== 'forgot' ? (
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full py-2.5 rounded font-medium text-sm transition-opacity disabled:opacity-60 bg-primary text-white"
+                    >
+                      {loading ? 'Đang xử lý...' : currentMode === 'login' ? 'Đăng nhập' : 'Đăng ký'}
+                    </button>
+                  ) : null}
 
                   {currentMode === 'login' && (
                     <>

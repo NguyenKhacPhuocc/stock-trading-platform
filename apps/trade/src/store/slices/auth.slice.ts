@@ -6,6 +6,7 @@ export interface AuthUser {
   fullName: string;
   email: string | null;
   role: 'user' | 'admin';
+  hasTradingPin: boolean;
 }
 
 export type TradingAccountTypeCode = 'CASH' | 'MARGIN' | 'DERIVATIVE' | 'BOND';
@@ -76,6 +77,9 @@ const authSlice = createSlice({
         state.selectedTradingAccountId = action.payload;
       }
     },
+    setHasTradingPin(state) {
+      if (state.user) state.user.hasTradingPin = true;
+    },
     clearUser(state) {
       state.user = null;
       state.tradingAccounts = [];
@@ -86,14 +90,27 @@ const authSlice = createSlice({
     finishHydratingSession(state) {
       state.isHydratingSession = false;
     },
+    patchUserProfile(
+      state,
+      action: PayloadAction<{ fullName?: string; email?: string | null }>,
+    ) {
+      if (!state.user) return;
+      if (action.payload.fullName !== undefined) {
+        state.user.fullName = action.payload.fullName;
+      }
+      if (action.payload.email !== undefined) {
+        state.user.email = action.payload.email;
+      }
+    },
   },
 });
 
 export const {
   setSession,
   setSelectedTradingAccountId,
+  setHasTradingPin,
   clearUser,
   finishHydratingSession,
-} =
-  authSlice.actions;
+  patchUserProfile,
+} = authSlice.actions;
 export default authSlice.reducer;

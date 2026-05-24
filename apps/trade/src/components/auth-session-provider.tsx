@@ -11,6 +11,7 @@ import {
   AUTH_SESSION_REFRESH_MS,
   fetchAuthenticatedSession,
 } from '@/lib/fetch-auth-session';
+import { TradingPinSetupModal } from '@/components/trading-pin-setup-modal';
 
 
 export default function AuthSessionProvider({
@@ -21,6 +22,9 @@ export default function AuthSessionProvider({
   const dispatch = useAppDispatch();
   const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
   const isHydratingSession = useAppSelector((s) => s.auth.isHydratingSession);
+  const hasTradingPin = useAppSelector((s) => s.auth.user?.hasTradingPin === true);
+  const showPinSetup =
+    isAuthenticated && !isHydratingSession && !hasTradingPin;
   const expiredNotifiedRef = useRef(false);
 
   const { data, isFetched, isError } = useQuery({
@@ -52,5 +56,10 @@ export default function AuthSessionProvider({
     dispatch(clearUser());
   }, [data, isFetched, dispatch]);
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <TradingPinSetupModal open={showPinSetup} />
+    </>
+  );
 }

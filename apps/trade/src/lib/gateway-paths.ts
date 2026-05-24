@@ -22,6 +22,29 @@ export const GATEWAY_AUTH = {
   logout: `${AUTH_GW}/logout`,
   refresh: `${AUTH_GW}/refresh`,
   session: `${AUTH_GW}/session`,
+  forgotPasswordRequest: `${AUTH_GW}/forgot-password/request`,
+  forgotPasswordConfirm: `${AUTH_GW}/forgot-password/confirm`,
+} as const;
+
+// ─── Users gateway paths ────────────────────────────────────────────────────────
+
+const USERS_GW = `${TRADE_BASE_PATH}/api/gateway/users`;
+
+export const GATEWAY_USERS = {
+  profile: `${USERS_GW}/me`,
+  changePassword: `${USERS_GW}/me/password`,
+  setupTradingPin: `${USERS_GW}/me/trading-pin`,
+} as const;
+
+// ─── Wallet gateway paths ─────────────────────────────────────────────────────
+
+const WALLET_GW = `${TRADE_BASE_PATH}/api/gateway/wallet`;
+
+export const GATEWAY_WALLET = {
+  /** Sức mua + danh mục (sức bán theo mã) — dùng cho màn đặt lệnh */
+  portfolio: `${WALLET_GW}/portfolio`,
+  summary: WALLET_GW,
+  positions: `${WALLET_GW}/positions`,
 } as const;
 
 // ─── Orders gateway paths ─────────────────────────────────────────────────────
@@ -31,6 +54,7 @@ const ORDERS_GW = `${TRADE_BASE_PATH}/api/gateway/orders`;
 export const GATEWAY_ORDERS = {
   list: ORDERS_GW,
   place: ORDERS_GW,
+  preCheck: `${ORDERS_GW}/pre-check`,
   cancel: (id: string) => `${ORDERS_GW}/${id}/cancel`,
 } as const;
 
