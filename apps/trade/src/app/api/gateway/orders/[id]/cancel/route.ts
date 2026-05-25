@@ -44,16 +44,23 @@ export async function POST(req: NextRequest, context: RouteContext) {
         ec: 400,
       });
     }
+    const tradingAccountId = req.nextUrl.searchParams.get('tradingAccountId');
+    if (!tradingAccountId) {
+      return gwResError('Thiếu tradingAccountId', { httpStatus: 400, ec: 400 });
+    }
     const idempotencyKey = req.headers.get('idempotency-key') ?? '';
-    const upstream = await fetch(`${origin}/api/orders/${id}`, {
+    const upstream = await fetch(
+      `${origin}/api/orders/${id}?tradingAccountId=${encodeURIComponent(tradingAccountId)}`,
+      {
       method: 'DELETE',
       signal: ac.signal,
-      headers: {
-        Accept: 'application/json',
-        Cookie: req.headers.get('cookie') ?? '',
-        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+        headers: {
+          Accept: 'application/json',
+          Cookie: req.headers.get('cookie') ?? '',
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+        },
       },
-    });
+    );
 
     const text = await upstream.text();
     const body = toBodyOrNull(text);

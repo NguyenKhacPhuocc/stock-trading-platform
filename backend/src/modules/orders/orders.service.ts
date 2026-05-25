@@ -32,6 +32,7 @@ import {
   orderIntentByTxKey,
   type StoredOrderIntent,
 } from './util/order-intent.util';
+import { resolveTradingAccountForUser } from '../../common/utils/resolve-trading-account.util';
 
 /**
  * Đặt / hủy lệnh — ghi DB + khóa tài sản, rồi đẩy job khớp.
@@ -85,16 +86,6 @@ export class OrdersService {
     await this.redis.set(orderIntentByTokenKey(tokenId), transactionId, ttl);
 
     return { requestId, transactionId, tokenId };
-  }
-
-  private async getDefaultAccount(userId: string): Promise<TradingAccount> {
-    const account = await this.accountRepo.findOne({
-      where: { userId, isDefault: true },
-    });
-    if (!account) {
-      this.throwBusinessError('TRADING_ACCOUNT_NOT_FOUND', undefined, 404);
-    }
-    return account;
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
@@ -215,8 +206,12 @@ export class OrdersService {
     );
   }
 
-  async getUserOrders(userId: string) {
-    const account = await this.getDefaultAccount(userId);
+  async getUserOrders(userId: string, tradingAccountId: string) {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
     const orders = await this.orderRepo.find({
       where: { tradingAccountId: account.id },
       relations: { stock: true, tradingAccount: true },
@@ -268,8 +263,16 @@ export class OrdersService {
     return map;
   }
 
-  async cancelOrder(userId: string, orderId: string) {
-    const account = await this.getDefaultAccount(userId);
+  async cancelOrder(
+    userId: string,
+    orderId: string,
+    tradingAccountId: string,
+  ) {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
     const saved = await this.dataSource.transaction(async (manager) => {
       const order = await manager.findOne(Order, {
         where: {
@@ -394,6 +397,7 @@ export class OrdersService {
 
     if (
       intent.userId !== userId ||
+      intent.tradingAccountId !== dto.tradingAccountId ||
       intent.tokenId !== dto.tokenId ||
       intent.requestId !== dto.requestId
     ) {
@@ -433,7 +437,11 @@ export class OrdersService {
       this.throwBusinessError('INVALID_PRICE');
     }
 
-    const account = await this.getDefaultAccount(userId);
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      dto.tradingAccountId,
+    );
     const stock = await this.stockRepo.findOne({ where: { id: dto.stockId } });
     if (!stock) {
       this.throwBusinessError('STOCK_NOT_FOUND');

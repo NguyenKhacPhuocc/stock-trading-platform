@@ -28,19 +28,27 @@ function pickUpstreamErrorMessage(body: unknown, fallback: string): string {
 }
 
 export async function GET(req: NextRequest) {
+  const tradingAccountId = req.nextUrl.searchParams.get('tradingAccountId');
+  if (!tradingAccountId) {
+    return gwResError('Thiếu tradingAccountId', { httpStatus: 400, ec: 400 });
+  }
+
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), ORDER_TIMEOUT_MS);
   const origin = gatewayBackendOrigin();
 
   try {
-    const upstream = await fetch(`${origin}/api/orders`, {
+    const upstream = await fetch(
+      `${origin}/api/orders?tradingAccountId=${encodeURIComponent(tradingAccountId)}`,
+      {
       method: 'GET',
       signal: ac.signal,
-      headers: {
-        Accept: 'application/json',
-        Cookie: req.headers.get('cookie') ?? '',
+        headers: {
+          Accept: 'application/json',
+          Cookie: req.headers.get('cookie') ?? '',
+        },
       },
-    });
+    );
 
     const text = await upstream.text();
     const body = toBodyOrNull(text);

@@ -13,6 +13,7 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
+import { AuditLog } from '../../database/entities/audit-log.entity';
 import { WalletModule } from '../wallet/wallet.module';
 import { RedisModule } from '../../redis/redis.module';
 
@@ -28,6 +29,7 @@ import { RedisModule } from '../../redis/redis.module';
       Wallet,
       SystemConfig,
       RefreshToken,
+      AuditLog,
     ]),
     JwtModule.registerAsync({
       inject: [ConfigService],

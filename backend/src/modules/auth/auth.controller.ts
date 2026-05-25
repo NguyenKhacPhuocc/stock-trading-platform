@@ -23,6 +23,10 @@ import { User } from '../../database/entities/user.entity';
 import { ttlToMs } from './auth-token.util';
 import { ConfigService } from '@nestjs/config';
 import { BusinessException } from '../../common/errors/business.exception';
+import {
+  resolveClientIp,
+  resolveClientUserAgent,
+} from '../../common/utils/request-client.util';
 
 @Controller('auth')
 export class AuthController {
@@ -40,9 +44,13 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() dto: LoginDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result: AuthTokensPayload = await this.authService.login(dto);
+    const result: AuthTokensPayload = await this.authService.login(dto, {
+      ipAddress: resolveClientIp(req),
+      userAgent: resolveClientUserAgent(req),
+    });
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     // Postman: dùng accessToken / refreshToken trong body; trình duyệt dùng cookie
     return {

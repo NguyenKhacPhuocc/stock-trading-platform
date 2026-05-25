@@ -34,6 +34,9 @@ export const GATEWAY_USERS = {
   profile: `${USERS_GW}/me`,
   changePassword: `${USERS_GW}/me/password`,
   setupTradingPin: `${USERS_GW}/me/trading-pin`,
+  changeTradingPin: `${USERS_GW}/me/trading-pin/change`,
+  loginHistory: `${USERS_GW}/me/login-history`,
+  profileChangeHistory: `${USERS_GW}/me/profile-change-history`,
 } as const;
 
 // ─── Wallet gateway paths ─────────────────────────────────────────────────────
@@ -43,8 +46,20 @@ const WALLET_GW = `${TRADE_BASE_PATH}/api/gateway/wallet`;
 export const GATEWAY_WALLET = {
   /** Sức mua + danh mục (sức bán theo mã) — dùng cho màn đặt lệnh */
   portfolio: `${WALLET_GW}/portfolio`,
+  /** NAV, tiền, vị thế, P/L — trang danh mục */
+  overview: `${WALLET_GW}/overview`,
   summary: WALLET_GW,
   positions: `${WALLET_GW}/positions`,
+} as const;
+
+// ─── Notifications gateway paths ──────────────────────────────────────────────
+
+const NOTIFICATIONS_GW = `${TRADE_BASE_PATH}/api/gateway/notifications`;
+
+export const GATEWAY_NOTIFICATIONS = {
+  list: NOTIFICATIONS_GW,
+  readAll: `${NOTIFICATIONS_GW}/read-all`,
+  read: (id: string) => `${NOTIFICATIONS_GW}/${id}/read`,
 } as const;
 
 // ─── Orders gateway paths ─────────────────────────────────────────────────────

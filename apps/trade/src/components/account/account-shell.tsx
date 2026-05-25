@@ -11,7 +11,7 @@ type AccountShellProps = {
 
 export function AccountShell({ children }: AccountShellProps) {
   const { isReady, isHydratingSession } = useRequireAuth(
-    'Vui lòng đăng nhập để quản lý tài khoản',
+    'Vui lòng đăng nhập để xem tài khoản',
   );
 
   if (isHydratingSession || !isReady) {
@@ -27,9 +27,9 @@ export function AccountShell({ children }: AccountShellProps) {
       <Sidebar
         items={ACCOUNT_NAV_ITEMS}
         title="Tài khoản"
-        subtitle="Quản lý hồ sơ & bảo mật"
+        subtitle="Tài sản & vị thế"
       />
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">{children}</div>
     </div>
   );
 }

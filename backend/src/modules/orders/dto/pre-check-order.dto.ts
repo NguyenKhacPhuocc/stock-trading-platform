@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsInt,
   IsNumber,
+  IsUUID,
   Min,
   ValidateIf,
 } from 'class-validator';
@@ -10,6 +11,10 @@ import { OrderSide, OrderType } from '../../../common/const';
 
 /** Tham số kiểm tra trước khi mở modal xác nhận — không ghi DB. */
 export class PreCheckOrderDto {
+  /** Tiểu khoản đang chọn trên UI — phải khớp khi create. */
+  @IsUUID()
+  tradingAccountId: string;
+
   @IsString()
   stockId: string;
 

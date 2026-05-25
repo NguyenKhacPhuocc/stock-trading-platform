@@ -164,7 +164,7 @@ export default function AccountInfoPage() {
     }
     const nextPhone = phoneTrim || null;
     if (nextPhone !== profile.phone) {
-      payload.phone = phoneTrim || undefined;
+      payload.phone = phoneTrim;
     }
 
     if (profile.editable.email) {

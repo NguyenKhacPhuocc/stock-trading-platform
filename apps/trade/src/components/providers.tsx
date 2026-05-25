@@ -7,6 +7,7 @@ import { queryClient } from '@stock/utils';
 import AuthSessionProvider from '@/components/auth-session-provider';
 import SessionHydrationGate from '@/components/session-hydration-gate';
 import { TradeRealtimeProvider } from '@/components/trade-realtime-provider';
+import { OrderNotificationsListener } from '@/components/order-notifications-listener';
 import { Toaster } from 'sonner';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,10 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <TradeRealtimeProvider>
         <QueryClientProvider client={queryClient}>
           <AuthSessionProvider>
-            <SessionHydrationGate>{children}</SessionHydrationGate>
+            <SessionHydrationGate>
+              <OrderNotificationsListener />
+              {children}
+            </SessionHydrationGate>
             <Toaster richColors position="bottom-right" closeButton duration={5000} />
           </AuthSessionProvider>
         </QueryClientProvider>

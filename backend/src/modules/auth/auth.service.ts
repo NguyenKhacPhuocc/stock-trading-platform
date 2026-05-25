@@ -26,6 +26,9 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { WalletService } from '../wallet/wallet.service';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
+import { AuditLog } from '../../database/entities/audit-log.entity';
+import { AuditAction } from '../../common/const/audit-actions';
+import { loginChannelFromUserAgent } from '../../common/utils/request-client.util';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordRequestDto } from './dto/forgot-password-request.dto';
@@ -60,6 +63,8 @@ export class AuthService {
     private configRepo: Repository<SystemConfig>,
     @InjectRepository(RefreshToken)
     private refreshRepo: Repository<RefreshToken>,
+    @InjectRepository(AuditLog)
+    private auditRepo: Repository<AuditLog>,
     private jwt: JwtService,
     private dataSource: DataSource,
     private config: ConfigService,
@@ -202,7 +207,10 @@ export class AuthService {
     );
   }
 
-  async login(dto: LoginDto): Promise<AuthTokensPayload> {
+  async login(
+    dto: LoginDto,
+    meta?: { ipAddress?: string | null; userAgent?: string | null },
+  ): Promise<AuthTokensPayload> {
     const custId = dto.custId.trim().toUpperCase();
     const user = await this.userRepo.findOne({ where: { custId } });
     if (!user || !user.isActive) {
@@ -221,6 +229,25 @@ export class AuthService {
         HttpStatus.UNAUTHORIZED,
       );
     }
+
+    const loginAt = new Date();
+    await this.auditRepo.save(
+      this.auditRepo.create({
+        actorUserId: user.id,
+        action: AuditAction.USER_LOGIN,
+        entityType: 'user',
+        entityId: user.id,
+        createdAt: loginAt,
+        payloadAfter: {
+          custId: user.custId,
+          userAgent: meta?.userAgent ?? null,
+          channel: loginChannelFromUserAgent(meta?.userAgent ?? null),
+          /** Instant UTC chuẩn — tránh lệch khi `created_at` là timestamp without time zone */
+          loginAtUtc: loginAt.toISOString(),
+        },
+        ipAddress: meta?.ipAddress ?? null,
+      }),
+    );
 
     return this.issueTokensForUser(user);
   }

@@ -5,7 +5,9 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -32,12 +34,19 @@ export class OrdersController {
   }
 
   @Get()
-  getMyOrders(@CurrentUser() user: { id: string }) {
-    return this.orders.getUserOrders(user.id);
+  getMyOrders(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+  ) {
+    return this.orders.getUserOrders(user.id, tradingAccountId);
   }
 
   @Delete(':id')
-  cancel(@CurrentUser() user: { id: string }, @Param('id') id: string) {
-    return this.orders.cancelOrder(user.id, id);
+  cancel(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+  ) {
+    return this.orders.cancelOrder(user.id, id, tradingAccountId);
   }
 }

@@ -19,13 +19,20 @@ import { Position } from '../../database/entities/position.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
 import {
+  NotificationType,
   OrderSide,
   OrderStatus,
   OrderType,
   TransactionType,
 } from '../../common/const';
+import { NotificationsService } from '../notifications/notifications.service';
 import { isMakOrderType } from '../orders/util/mak-order.util';
 import type { OrderFillNotify } from './dto/order-fill-notify.dto';
+import type {
+  OrderMatchedNotificationWs,
+  OrderMatchedWsPayload,
+} from './dto/order-matched-ws.dto';
+import type { Notification } from '../../database/entities/notification.entity';
 import { MarketService } from '../market/market.service';
 import type { QueuedOrder } from './dto/matching.dto';
 import type {
@@ -63,6 +70,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     private readonly market: MarketService,
     @Inject(forwardRef(() => AppGateway))
     private readonly gateway: AppGateway,
+    private readonly notifications: NotificationsService,
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
     @InjectRepository(Trade) private readonly tradeRepo: Repository<Trade>,
   ) {}
@@ -342,7 +350,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         const fillResult = await this.tradeFill.applyFills(fills, sym);
         lastPx = fillResult.lastTradePrice;
         lastMq = fills[fills.length - 1]?.quantity ?? 0;
-        this.emitOrderMatchedNotifies(fillResult.notifies);
+        await this.emitOrderMatchedNotifies(fillResult.notifies);
         this.emitTradeTicks(stockId, fills);
       }
 
@@ -355,7 +363,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
           );
           const makNotify = await this.killMakRemainder(order.id, sym);
           if (makNotify) {
-            this.emitOrderMatchedNotifies([makNotify]);
+            await this.emitOrderMatchedNotifies([makNotify]);
           }
         } else {
           this.logger.log(
@@ -498,16 +506,71 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         matchedQty: Number(order.matchedQty),
         quantity: Number(order.quantity),
         side: order.side,
+        symbol: symbol.trim().toUpperCase(),
+        fillPrice: 0,
+        fillQty: 0,
       };
     });
   }
 
-  private emitOrderMatchedNotifies(notifies: OrderFillNotify[]): void {
+  private async emitOrderMatchedNotifies(
+    notifies: OrderFillNotify[],
+  ): Promise<void> {
     for (const n of notifies) {
+      const saved = await this.persistOrderMatchedNotification(n);
+      if (!saved) continue;
+
+      const payload: OrderMatchedWsPayload = {
+        ...n,
+        notification: this.toNotificationWs(saved),
+      };
       this.logger.log(
-        `[order-flow] emit WS order:matched | orderId=${n.orderId} userId=${n.userId.slice(0, 8)} status=${n.status} matched=${n.matchedQty}/${n.quantity}`,
+        `[order-flow] emit WS order:matched | orderId=${n.orderId} userId=${n.userId.slice(0, 8)} notifId=${saved.id.slice(0, 8)} matched=${n.matchedQty}/${n.quantity}`,
       );
-      this.gateway.emitOrderMatched(n.userId, n);
+      this.gateway.emitOrderMatched(n.userId, payload);
+    }
+  }
+
+  private toNotificationWs(row: Notification): OrderMatchedNotificationWs {
+    return {
+      id: row.id,
+      type: String(row.type),
+      title: row.title,
+      content: row.content,
+      isRead: row.isRead,
+      createdAt:
+        row.createdAt instanceof Date
+          ? row.createdAt.toISOString()
+          : String(row.createdAt),
+    };
+  }
+
+  private async persistOrderMatchedNotification(
+    n: OrderFillNotify,
+  ): Promise<Notification | null> {
+    try {
+      const sideLabel = n.side === OrderSide.SELL ? 'Bán' : 'Mua';
+      const title = `Khớp lệnh ${n.symbol} (${sideLabel})`;
+      const statusLabel = String(n.status);
+      const fillQty = Number(n.fillQty);
+      const fillPrice = Number(n.fillPrice);
+      const matchedQty = Number(n.matchedQty);
+      const quantity = Number(n.quantity);
+      const content =
+        fillQty > 0
+          ? `Khớp ${fillQty.toLocaleString('vi-VN')} CP @ ${fillPrice.toLocaleString('vi-VN')} — Tổng ${matchedQty.toLocaleString('vi-VN')}/${quantity.toLocaleString('vi-VN')} (${statusLabel})`
+          : `Cập nhật lệnh — Tổng khớp ${matchedQty.toLocaleString('vi-VN')}/${quantity.toLocaleString('vi-VN')} (${statusLabel})`;
+      return await this.notifications.create(
+        n.userId,
+        NotificationType.ORDER_MATCHED,
+        title,
+        content,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `[order-flow] notification persist failed | orderId=${n.orderId} ${String(e)}`,
+      );
+      return null;
     }
   }
 

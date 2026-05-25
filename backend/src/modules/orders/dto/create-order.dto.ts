@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsInt,
   IsNumber,
+  IsUUID,
   Min,
   MinLength,
   MaxLength,
@@ -13,6 +14,10 @@ import {
 import { OrderSide, OrderType } from '../../../common/const';
 
 export class CreateOrderDto {
+  /** Tiểu khoản đặt lệnh — phải trùng pre-check intent. */
+  @IsUUID()
+  tradingAccountId: string;
+
   /** Idempotency — UUID hoặc chuỗi unique do FE sinh. */
   @IsString()
   @MinLength(8)

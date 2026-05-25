@@ -229,8 +229,10 @@ export class TradeFillService {
       );
     }
 
-    await this.pushOrderNotify(manager, buyOrder, notifies, seenOrderIds);
-    await this.pushOrderNotify(manager, sellOrder, notifies, seenOrderIds);
+    const sym = (symbol ?? '').trim().toUpperCase();
+    const fillCtx = { symbol: sym, fillPrice: px, fillQty: mq };
+    await this.pushOrderNotify(manager, buyOrder, notifies, seenOrderIds, fillCtx);
+    await this.pushOrderNotify(manager, sellOrder, notifies, seenOrderIds, fillCtx);
 
     return px;
   }
@@ -240,6 +242,7 @@ export class TradeFillService {
     order: Order,
     notifies: OrderFillNotify[],
     seenOrderIds: Set<string>,
+    fillCtx: { symbol: string; fillPrice: number; fillQty: number },
   ): Promise<void> {
     if (seenOrderIds.has(order.id)) return;
     seenOrderIds.add(order.id);
@@ -256,6 +259,9 @@ export class TradeFillService {
       matchedQty: Number(order.matchedQty),
       quantity: Number(order.quantity),
       side: order.side,
+      symbol: fillCtx.symbol,
+      fillPrice: fillCtx.fillPrice,
+      fillQty: fillCtx.fillQty,
     });
   }
 }

@@ -10,6 +10,7 @@ import { bffClient, queryClient } from '@stock/utils';
 import { GATEWAY_AUTH } from '@/lib/gateway-paths';
 import { AUTH_SESSION_QUERY_KEY } from '@/lib/fetch-auth-session';
 import AuthPopup from './auth-popup';
+import { NotificationBell } from './notification-bell';
 
 type LocalePref = 'vi' | 'en';
 type ThemePref = 'dark' | 'light';
@@ -122,7 +123,7 @@ export default function TradeHeader() {
     router.refresh();
   }
 
-  function isNavActive(route: '/priceboard' | '/portfolio' | '/order'): boolean {
+  function isNavActive(route: '/priceboard' | '/account' | '/order'): boolean {
     const normalized = pathname.startsWith('/trade') ? pathname.slice('/trade'.length) || '/' : pathname;
     if (route === '/priceboard') {
       return normalized === '/' || normalized.startsWith('/priceboard');
@@ -130,7 +131,7 @@ export default function TradeHeader() {
     return normalized.startsWith(route);
   }
 
-  function navLinkClass(route: '/priceboard' | '/portfolio' | '/order'): string {
+  function navLinkClass(route: '/priceboard' | '/account' | '/order'): string {
     const active = isNavActive(route);
     return `inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-medium transition-all duration-200 ${active
       ? 'bg-primary text-black shadow-[0_6px_18px_rgba(33,206,60,0.35)]'
@@ -158,9 +159,6 @@ export default function TradeHeader() {
             <Link href="/priceboard" className={navLinkClass('/priceboard')}>
               Bảng giá
             </Link>
-            <Link href="/portfolio" className={navLinkClass('/portfolio')}>
-              Danh mục
-            </Link>
             {!user ? (
               <button
                 type="button"
@@ -173,6 +171,19 @@ export default function TradeHeader() {
               <Link href="/order" className={navLinkClass('/order')}>
                 Đặt lệnh
               </Link>
+            )}
+            {user ? (
+              <Link href="/account" className={navLinkClass('/account')}>
+                Tài khoản
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAuthModal('login')}
+                className={navLinkClass('/account')}
+              >
+                Tài khoản
+              </button>
             )}
           </nav>
         </div>
@@ -246,6 +257,8 @@ export default function TradeHeader() {
                 <span className="font-mono text-[12px] text-muted">{user.custId}</span>
               )}
 
+              <NotificationBell />
+
               <div className="relative" ref={userMenuRef}>
                 <button
                   type="button"
@@ -277,12 +290,12 @@ export default function TradeHeader() {
                     </div>
 
                     <Link
-                      href="/account/info"
+                      href="/settings/personal-info"
                       role="menuitem"
                       className="block border-b border-border px-2 py-2 text-foreground hover:bg-surface-2"
                       onClick={() => setUserMenuOpen(false)}
                     >
-                      Thông tin tài khoản
+                      Thông tin cá nhân
                     </Link>
 
                     <SettingsTripleRow

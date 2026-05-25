@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { appendSetCookies, gwResError, gwResSuccess } from '@/lib/gateway-envelope';
+import { forwardClientHeaders } from '@/lib/gateway-client-forward-headers';
 import { gatewayBackendOrigin, gatewayUpstreamCatch } from '@/lib/gateway-internal';
 
 const AUTH_TIMEOUT_MS = 10_000;
@@ -17,6 +18,7 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'application/json',
         Accept: 'application/json',
         Cookie: req.headers.get('cookie') ?? '',
+        ...forwardClientHeaders(req),
       },
       body,
       signal: ac.signal,

@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { OrderBookPanel } from '@/components/order/order-book-panel';
 import { OrderChartPanel } from '@/components/order/order-chart-panel';
@@ -16,13 +16,15 @@ import type {
   OrderSide,
   OrderType,
 } from '@/components/order/order-types';
+import { isValidLotQuantity, parseOrderQuantityInput } from '@/components/order/order-types';
 import {
-  formatOrderStatusLabel,
-  isValidLotQuantity,
-  parseOrderQuantityInput,
-} from '@/components/order/order-types';
+  filterOrderRows,
+  type OrderListStatusFilter,
+} from '@/lib/filter-orders';
+import { ORDERS_FOCUS_LIST_EVT } from '@/lib/order-fill-notify';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { GATEWAY_ORDERS, GATEWAY_WALLET } from '@/lib/gateway-paths';
+import { withTradingAccountQuery } from '@/lib/trading-account-query';
 import { clearUser } from '@/store/slices/auth.slice';
 import { useOrderBookRealtime } from '@/hooks/use-order-book-realtime';
 import { useTradeRealtimeSocket } from '@/components/trade-realtime-provider';
@@ -68,6 +70,7 @@ function mapOrderListItem(item: Record<string, unknown>): OrderRow {
 
 export default function OrderPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
   const searchUniverse = useAppSelector((s) => s.market.searchUniverse);
   const marketEntities = useAppSelector((s) => s.market.entities);
@@ -104,7 +107,15 @@ export default function OrderPage() {
   const [isPreChecking, setIsPreChecking] = useState(false);
   /** Chưa gán mã từ session / mặc định — tránh WS `subscribe:i` mã đầu danh sách rồi mới đổi. */
   const [orderSymbolBootstrapped, setOrderSymbolBootstrapped] = useState(false);
+  const [orderStatusFilter, setOrderStatusFilter] =
+    useState<OrderListStatusFilter>('all');
+  const [orderSymbolFilter, setOrderSymbolFilter] = useState('');
   const redirectedUnauthRef = useRef(false);
+
+  const filteredOrders = useMemo(
+    () => filterOrderRows(orders, orderStatusFilter, orderSymbolFilter),
+    [orders, orderStatusFilter, orderSymbolFilter],
+  );
 
   const handleSessionExpired = useCallback(() => {
     dispatch(clearUser());
@@ -122,12 +133,13 @@ export default function OrderPage() {
 
   const reloadOrders = useCallback(
     async (opts?: { silent?: boolean }) => {
-      if (isHydratingSession || !isAuthenticated) return;
+      if (isHydratingSession || !isAuthenticated || !selectedTradingAccountId) return;
       if (!opts?.silent) setIsLoadingOrders(true);
       try {
-        const res = await fetch(GATEWAY_ORDERS.list, {
-          credentials: 'same-origin',
-        });
+        const res = await fetch(
+          withTradingAccountQuery(GATEWAY_ORDERS.list, selectedTradingAccountId),
+          { credentials: 'same-origin' },
+        );
         if (res.status === 401) {
           handleSessionExpired();
           return;
@@ -149,18 +161,24 @@ export default function OrderPage() {
         if (!opts?.silent) setIsLoadingOrders(false);
       }
     },
-    [handleSessionExpired, isAuthenticated, isHydratingSession],
+    [
+      handleSessionExpired,
+      isAuthenticated,
+      isHydratingSession,
+      selectedTradingAccountId,
+    ],
   );
 
   const reloadOrdersRef = useRef(reloadOrders);
   reloadOrdersRef.current = reloadOrders;
 
   const reloadPortfolio = useCallback(async () => {
-    if (isHydratingSession || !isAuthenticated) return;
+    if (isHydratingSession || !isAuthenticated || !selectedTradingAccountId) return;
     try {
-      const res = await fetch(GATEWAY_WALLET.portfolio, {
-        credentials: 'same-origin',
-      });
+      const res = await fetch(
+        withTradingAccountQuery(GATEWAY_WALLET.portfolio, selectedTradingAccountId),
+        { credentials: 'same-origin' },
+      );
       if (res.status === 401) {
         handleSessionExpired();
         return;
@@ -188,7 +206,12 @@ export default function OrderPage() {
     } catch {
       /* sức mua/bán phụ — không chặn đặt lệnh */
     }
-  }, [handleSessionExpired, isAuthenticated, isHydratingSession]);
+  }, [
+    handleSessionExpired,
+    isAuthenticated,
+    isHydratingSession,
+    selectedTradingAccountId,
+  ]);
 
   const reloadPortfolioRef = useRef(reloadPortfolio);
   reloadPortfolioRef.current = reloadPortfolio;
@@ -208,57 +231,42 @@ export default function OrderPage() {
   useEffect(() => {
     if (!socket || !authUserId || !isAuthenticated) return;
 
-    const subscribeMe = () => {
-      socket.emit('subscribe:me', { userId: authUserId });
-    };
-    const onOrderMatched = (payload: unknown) => {
+    const onOrderMatched = () => {
       void reloadOrdersRef.current({ silent: true });
       void reloadPortfolioRef.current();
-      if (payload && typeof payload === 'object') {
-        const p = payload as {
-          side?: string;
-          matchedQty?: number;
-          quantity?: number;
-          status?: string;
-        };
-        const sideLabel = p.side === 'sell' ? 'Bán' : 'Mua';
-        const matched = Number(p.matchedQty ?? 0);
-        const total = Number(p.quantity ?? 0);
-        const statusLabel = formatOrderStatusLabel(String(p.status ?? ''));
-        toast.success(
-          `Lệnh ${sideLabel}: khớp ${matched.toLocaleString('vi-VN')}/${total.toLocaleString('vi-VN')} — ${statusLabel}`,
-        );
-      }
     };
 
-    socket.on('connect', subscribeMe);
     socket.on(WS_SERVER_EVT.ORDER_MATCHED, onOrderMatched);
-    if (socket.connected) subscribeMe();
 
     return () => {
-      socket.off('connect', subscribeMe);
       socket.off(WS_SERVER_EVT.ORDER_MATCHED, onOrderMatched);
-      socket.emit('unsubscribe:me', { userId: authUserId });
     };
   }, [socket, authUserId, isAuthenticated]);
 
   useEffect(() => {
+    const onFocusList = () => setBottomTab('orders');
+    window.addEventListener(ORDERS_FOCUS_LIST_EVT, onFocusList);
+    return () => window.removeEventListener(ORDERS_FOCUS_LIST_EVT, onFocusList);
+  }, []);
+
+  useEffect(() => {
     if (searchUniverse.length === 0 || orderSymbolBootstrapped) return;
     try {
+      const fromUrl = searchParams.get('symbol')?.trim().toUpperCase() ?? '';
       const saved = sessionStorage
         .getItem(ORDER_SYMBOL_STORAGE_KEY)
         ?.trim()
         .toUpperCase();
-      if (saved && searchUniverse.some((s) => s.symbol === saved)) {
-        setSymbol(saved);
-      } else {
-        setSymbol(searchUniverse[0].symbol);
-      }
+      const pick =
+        (fromUrl && searchUniverse.some((s) => s.symbol === fromUrl) && fromUrl) ||
+        (saved && searchUniverse.some((s) => s.symbol === saved) && saved) ||
+        searchUniverse[0].symbol;
+      setSymbol(pick);
     } catch {
       setSymbol(searchUniverse[0].symbol);
     }
     setOrderSymbolBootstrapped(true);
-  }, [searchUniverse, orderSymbolBootstrapped]);
+  }, [searchUniverse, orderSymbolBootstrapped, searchParams]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -309,6 +317,11 @@ export default function OrderPage() {
       return;
     }
 
+    if (!selectedTradingAccountId) {
+      toast.error('Chưa chọn tài khoản giao dịch');
+      return;
+    }
+
     setIsPreChecking(true);
     try {
       const res = await fetch(GATEWAY_ORDERS.preCheck, {
@@ -316,6 +329,7 @@ export default function OrderPage() {
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          tradingAccountId: selectedTradingAccountId,
           stockId,
           side: orderSide,
           orderType,
@@ -371,7 +385,11 @@ export default function OrderPage() {
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      if (!selectedTradingAccountId) {
+        throw new Error('Chưa chọn tài khoản giao dịch');
+      }
       const payload = {
+        tradingAccountId: selectedTradingAccountId,
         clientOrderId,
         stockId,
         side: orderSide,
@@ -430,13 +448,20 @@ export default function OrderPage() {
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random()}`;
-      const res = await fetch(GATEWAY_ORDERS.cancel(id), {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Idempotency-Key': idempotencyKey,
+      if (!selectedTradingAccountId) {
+        toast.error('Chưa chọn tài khoản giao dịch');
+        return;
+      }
+      const res = await fetch(
+        withTradingAccountQuery(GATEWAY_ORDERS.cancel(id), selectedTradingAccountId),
+        {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+          },
         },
-      });
+      );
       if (res.status === 401) {
         handleSessionExpired();
         return;
@@ -525,10 +550,16 @@ export default function OrderPage() {
           panelCardClassName={panelCard}
           bottomTab={bottomTab}
           onBottomTabChange={setBottomTab}
-          orders={orders}
+          orders={filteredOrders}
           isLoadingOrders={isLoadingOrders}
           onCancelOrder={handleCancelOrder}
           cancellingOrderId={cancellingOrderId}
+          statusFilter={orderStatusFilter}
+          onStatusFilterChange={setOrderStatusFilter}
+          symbolFilter={orderSymbolFilter}
+          onSymbolFilterChange={setOrderSymbolFilter}
+          filteredCount={filteredOrders.length}
+          totalCount={orders.length}
         />
         <OrderTradeHistoryPanel
           panelCardClassName={panelCard}

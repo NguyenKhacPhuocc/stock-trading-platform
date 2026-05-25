@@ -1,20 +1,25 @@
 import { BadRequestException, Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, LessThanOrEqual, MoreThanOrEqual, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../database/entities/user.entity';
 import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { CustomerProfile } from '../../database/entities/customer-profile.entity';
+import { AuditLog } from '../../database/entities/audit-log.entity';
 import { tradingAccountStatusToApi } from '../../common/const';
-import {
-  isIdentityLocked,
-  KYC_STATUS_LABEL_VI,
-  KycStatus,
-} from '../../common/const/kyc-status';
+import { AuditAction } from '../../common/const/audit-actions';
+import { isIdentityLocked, KYC_STATUS_LABEL_VI, KycStatus } from '../../common/const/kyc-status';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetupTradingPinDto } from './dto/setup-trading-pin.dto';
+import { ChangeTradingPinDto } from './dto/change-trading-pin.dto';
 import { BusinessException } from '../../common/errors/business.exception';
+import {
+  loginChannelFromUserAgent,
+  loginChannelLabel,
+  normalizeDisplayIp,
+} from '../../common/utils/request-client.util';
+import { toUtcIsoString, vnDateRangeToUtcBounds } from '../../common/utils/vn-time.util';
 
 export type UserProfileResponse = {
   id: string;
@@ -51,7 +56,39 @@ export class UsersService {
     private accountRepo: Repository<TradingAccount>,
     @InjectRepository(CustomerProfile)
     private profileRepo: Repository<CustomerProfile>,
+    @InjectRepository(AuditLog)
+    private auditRepo: Repository<AuditLog>,
   ) {}
+
+  private async writeAudit(params: {
+    actorUserId: string;
+    action: string;
+    entityType?: string;
+    entityId?: string;
+    payloadBefore?: Record<string, unknown> | null;
+    payloadAfter?: Record<string, unknown> | null;
+    ipAddress?: string | null;
+  }) {
+    await this.auditRepo.save(
+      this.auditRepo.create({
+        actorUserId: params.actorUserId,
+        action: params.action,
+        entityType: params.entityType ?? 'user',
+        entityId: params.entityId ?? params.actorUserId,
+        payloadBefore: params.payloadBefore ?? null,
+        payloadAfter: params.payloadAfter ?? null,
+        ipAddress: params.ipAddress ?? null,
+      }),
+    );
+  }
+
+  private contactSnapshot(user: Pick<User, 'phone' | 'email' | 'fullName'>) {
+    return {
+      fullName: user.fullName,
+      phone: user.phone,
+      email: user.email,
+    };
+  }
 
   /** Danh sách tiểu khoản — `id` = mã tiểu khoản (account_id); thêm `tradingAccountId` = UUID nội bộ. */
   async listMyTradingAccounts(userId: string) {
@@ -107,9 +144,7 @@ export class UsersService {
     };
   }
 
-  /**
-   * Hook OTP liên hệ — hiện no-op; sau này verify contactOtpPhone / contactOtpEmail.
-   */
+  /** Hook OTP liên hệ — hiện no-op; sau này verify contactOtpPhone / contactOtpEmail. */
   private async verifyContactChangeOtp(
     _userId: string,
     _dto: UpdateProfileDto,
@@ -186,6 +221,8 @@ export class UsersService {
       await this.assertEmailAvailable(userId, patch.email);
     }
 
+    const beforeContact = this.contactSnapshot(user);
+
     await this.userRepo.update(userId, patch);
 
     const updated = await this.userRepo.findOne({
@@ -201,6 +238,12 @@ export class UsersService {
     }
 
     const profileAfter = await this.profileRepo.findOne({ where: { userId } });
+    await this.writeAudit({
+      actorUserId: userId,
+      action: AuditAction.USER_PROFILE_UPDATE,
+      payloadBefore: beforeContact,
+      payloadAfter: this.contactSnapshot(updated),
+    });
     return this.mapProfileResponse(
       updated,
       profileAfter,
@@ -224,6 +267,11 @@ export class UsersService {
 
     const newHash = await bcrypt.hash(dto.newPassword, 10);
     await this.userRepo.update(userId, { passwordHash: newHash });
+    await this.writeAudit({
+      actorUserId: userId,
+      action: AuditAction.USER_PASSWORD_CHANGE,
+      payloadAfter: { at: new Date().toISOString() },
+    });
     return { message: 'Đổi mật khẩu thành công' };
   }
 
@@ -250,6 +298,139 @@ export class UsersService {
 
     const tradingPinHash = await bcrypt.hash(dto.pin, 10);
     await this.userRepo.update(userId, { tradingPinHash });
+    await this.writeAudit({
+      actorUserId: userId,
+      action: AuditAction.USER_PIN_CHANGE,
+      payloadAfter: { type: 'setup' },
+    });
     return { hasTradingPin: true };
+  }
+
+  async changeTradingPin(userId: string, dto: ChangeTradingPinDto) {
+    if (dto.pin !== dto.confirmPin) {
+      throw new BusinessException('TRADING_PIN_MISMATCH');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'tradingPinHash'],
+    });
+    if (!user) {
+      throw new BusinessException(
+        'AUTH_INVALID_TOKEN',
+        undefined,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    if (!user.tradingPinHash) {
+      throw new BusinessException('TRADING_PIN_NOT_SET');
+    }
+
+    const valid = await bcrypt.compare(dto.currentPin, user.tradingPinHash);
+    if (!valid) {
+      throw new BusinessException('TRADING_PIN_INVALID');
+    }
+
+    const tradingPinHash = await bcrypt.hash(dto.pin, 10);
+    await this.userRepo.update(userId, { tradingPinHash });
+    await this.writeAudit({
+      actorUserId: userId,
+      action: AuditAction.USER_PIN_CHANGE,
+      payloadAfter: { type: 'change' },
+    });
+    return { hasTradingPin: true };
+  }
+
+  async listLoginHistory(
+    userId: string,
+    from?: string,
+    to?: string,
+  ): Promise<
+    {
+      id: string;
+      loginAt: string;
+      ipAddress: string | null;
+      channel: string;
+    }[]
+  > {
+    const where: Record<string, unknown> = {
+      actorUserId: userId,
+      action: AuditAction.USER_LOGIN,
+    };
+    const range = vnDateRangeToUtcBounds(from, to);
+    if (range.start && range.end) {
+      where.createdAt = Between(range.start, range.end);
+    } else if (range.start) {
+      where.createdAt = MoreThanOrEqual(range.start);
+    } else if (range.end) {
+      where.createdAt = LessThanOrEqual(range.end);
+    }
+
+    const rows = await this.auditRepo.find({
+      where,
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+
+    return rows.map((r) => {
+      const after = r.payloadAfter as {
+        userAgent?: string;
+        channel?: string;
+        loginAtUtc?: string;
+      } | null;
+      const channel =
+        after?.channel === 'app' || after?.channel === 'web'
+          ? loginChannelLabel(after.channel as 'web' | 'app')
+          : loginChannelLabel(loginChannelFromUserAgent(after?.userAgent ?? null));
+      const loginAt =
+        typeof after?.loginAtUtc === 'string' && after.loginAtUtc
+          ? after.loginAtUtc
+          : toUtcIsoString(r.createdAt);
+      return {
+        id: r.id,
+        loginAt,
+        ipAddress: normalizeDisplayIp(r.ipAddress),
+        channel,
+      };
+    });
+  }
+
+  async listProfileChangeHistory(
+    userId: string,
+    from?: string,
+    to?: string,
+  ): Promise<
+    {
+      id: string;
+      changedAt: string;
+      before: Record<string, unknown> | null;
+      after: Record<string, unknown> | null;
+    }[]
+  > {
+    const where: Record<string, unknown> = {
+      actorUserId: userId,
+      action: AuditAction.USER_PROFILE_UPDATE,
+    };
+    const range = vnDateRangeToUtcBounds(from, to);
+    if (range.start && range.end) {
+      where.createdAt = Between(range.start, range.end);
+    } else if (range.start) {
+      where.createdAt = MoreThanOrEqual(range.start);
+    } else if (range.end) {
+      where.createdAt = LessThanOrEqual(range.end);
+    }
+
+    const rows = await this.auditRepo.find({
+      where,
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      changedAt: toUtcIsoString(r.createdAt),
+      before: r.payloadBefore,
+      after: r.payloadAfter,
+    }));
   }
 }

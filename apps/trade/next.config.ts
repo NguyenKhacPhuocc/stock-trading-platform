@@ -26,6 +26,10 @@ const nextConfig: NextConfig = {
         permanent: false,
         basePath: false,
       },
+      { source: '/portfolio', destination: '/account', permanent: true },
+      { source: '/portfolio/:path*', destination: '/account/:path*', permanent: true },
+      { source: '/account/info', destination: '/settings/personal-info', permanent: true },
+      { source: '/account/password', destination: '/settings/change-password', permanent: true },
     ];
   },
 };

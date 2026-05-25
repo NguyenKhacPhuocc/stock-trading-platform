@@ -36,6 +36,7 @@ export function unwrapGatewayData(body: unknown): unknown {
 export async function fetchWalletUpstream(opts: {
   req: NextRequest;
   path: '/api/wallet' | '/api/wallet/positions';
+  tradingAccountId?: string | null;
   signal: AbortSignal;
   errorFallback: string;
 }): Promise<{
@@ -45,7 +46,11 @@ export async function fetchWalletUpstream(opts: {
   errorMessage: string;
 }> {
   const origin = gatewayBackendOrigin();
-  const upstream = await fetch(`${origin}${opts.path}`, {
+  const q =
+    opts.tradingAccountId != null && opts.tradingAccountId !== ''
+      ? `?tradingAccountId=${encodeURIComponent(opts.tradingAccountId)}`
+      : '';
+  const upstream = await fetch(`${origin}${opts.path}${q}`, {
     method: 'GET',
     signal: opts.signal,
     headers: {

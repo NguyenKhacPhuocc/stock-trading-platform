@@ -3,6 +3,7 @@ import {
   formatOrderRemainingLabel,
   formatOrderStatusLabel,
 } from './order-types';
+import type { OrderListStatusFilter } from '@/lib/filter-orders';
 
 type OrderMainBottomPanelProps = {
   panelCardClassName: string;
@@ -24,6 +25,12 @@ type OrderMainBottomPanelProps = {
   isLoadingOrders: boolean;
   onCancelOrder: (id: string) => void;
   cancellingOrderId?: string | null;
+  statusFilter: OrderListStatusFilter;
+  onStatusFilterChange: (v: OrderListStatusFilter) => void;
+  symbolFilter: string;
+  onSymbolFilterChange: (v: string) => void;
+  filteredCount: number;
+  totalCount: number;
 };
 
 export function OrderMainBottomPanel({
@@ -34,6 +41,12 @@ export function OrderMainBottomPanel({
   isLoadingOrders,
   onCancelOrder,
   cancellingOrderId = null,
+  statusFilter,
+  onStatusFilterChange,
+  symbolFilter,
+  onSymbolFilterChange,
+  filteredCount,
+  totalCount,
 }: OrderMainBottomPanelProps) {
   return (
     <div className={`${panelCardClassName} min-h-0 overflow-hidden xl:col-span-2`}>
@@ -72,6 +85,31 @@ export function OrderMainBottomPanel({
 
       <div className="h-[calc(100%-37px)] overflow-auto">
         {bottomTab === 'orders' && (
+          <>
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2">
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                onStatusFilterChange(e.target.value as OrderListStatusFilter)
+              }
+              className="rounded border border-border bg-[#11141b] px-2 py-1 text-[11px] text-foreground"
+            >
+              <option value="all">Tất cả trạng thái</option>
+              <option value="active">Đang chờ / khớp dở</option>
+              <option value="filled">Đã khớp hết</option>
+              <option value="cancelled">Đã hủy / từ chối</option>
+            </select>
+            <input
+              type="text"
+              value={symbolFilter}
+              onChange={(e) => onSymbolFilterChange(e.target.value)}
+              placeholder="Lọc mã CK..."
+              className="w-28 rounded border border-border bg-[#11141b] px-2 py-1 text-[11px] text-foreground placeholder:text-muted"
+            />
+            <span className="ml-auto text-[11px] text-muted">
+              {filteredCount}/{totalCount} lệnh
+            </span>
+          </div>
           <table className="w-full min-w-[980px] table-fixed text-xs">
             <thead className="bg-[#11141b] text-muted">
               <tr>
@@ -99,7 +137,9 @@ export function OrderMainBottomPanel({
               ) : orders.length === 0 ? (
                 <tr>
                   <td colSpan={12} className="px-2 py-8 text-center text-muted">
-                    Chưa có dữ liệu sổ lệnh.
+                    {totalCount > 0
+                      ? 'Không có lệnh phù hợp bộ lọc.'
+                      : 'Chưa có dữ liệu sổ lệnh.'}
                   </td>
                 </tr>
               ) : (
@@ -157,6 +197,7 @@ export function OrderMainBottomPanel({
               )}
             </tbody>
           </table>
+          </>
         )}
 
         {bottomTab === 'watchlist' && (

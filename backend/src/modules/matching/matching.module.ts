@@ -15,9 +15,11 @@ import { OrderbookRedisService } from './orderbook-redis.service';
 import { OrderbookWsService } from './orderbook-ws.service';
 import { WebsocketModule } from '../../websocket/websocket.module';
 import { MarketModule } from '../market/market.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
+    NotificationsModule,
     TypeOrmModule.forFeature([
       Order,
       Trade,

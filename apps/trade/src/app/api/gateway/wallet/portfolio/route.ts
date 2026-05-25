@@ -33,6 +33,11 @@ function mapPositions(rows: unknown[]): PortfolioPosition[] {
 }
 
 export async function GET(req: NextRequest) {
+  const tradingAccountId = req.nextUrl.searchParams.get('tradingAccountId');
+  if (!tradingAccountId) {
+    return gwResError('Thiếu tradingAccountId', { httpStatus: 400, ec: 400 });
+  }
+
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), WALLET_UPSTREAM_TIMEOUT_MS);
 
@@ -41,12 +46,14 @@ export async function GET(req: NextRequest) {
       fetchWalletUpstream({
         req,
         path: '/api/wallet',
+        tradingAccountId,
         signal: ac.signal,
         errorFallback: 'Không tải được số dư',
       }),
       fetchWalletUpstream({
         req,
         path: '/api/wallet/positions',
+        tradingAccountId,
         signal: ac.signal,
         errorFallback: 'Không tải được danh mục',
       }),
