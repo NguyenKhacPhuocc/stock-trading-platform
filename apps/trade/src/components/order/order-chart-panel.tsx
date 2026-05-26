@@ -155,7 +155,7 @@ export function OrderChartPanel({ panelCardClassName, symbolLabel }: OrderChartP
             Bảng giá
           </button>
         </div>
-        <div className="text-[12px] text-muted font-semibold bg-primary-dark px-2 py-[2px]  rounded text-white">{symbolLabel || '---'}</div>
+        <div className="text-sm text-muted font-semibold bg-primary-dark px-2 py-[2px]  rounded text-white">{symbolLabel || '---'}</div>
       </div>
       {tab === 'chart' ? (
         <div className="flex h-[calc(100%-37px)] items-center justify-center bg-black text-xs text-muted">

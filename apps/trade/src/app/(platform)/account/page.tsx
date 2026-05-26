@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { PortfolioPositionsTable } from '@/components/portfolio/portfolio-positions-table';
 import { PortfolioSummaryPanel } from '@/components/portfolio/portfolio-summary-panel';
 import { usePortfolioOverview } from '@/hooks/use-portfolio-overview';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
@@ -57,9 +56,11 @@ export default function AccountOverviewPage() {
   if (!data) return null;
 
   return (
-    <div className="space-y-3">
-      <PortfolioSummaryPanel data={data} accountIdLabel={accountIdLabel} />
-      <PortfolioPositionsTable positions={data.positions} />
-    </div>
+    <PortfolioSummaryPanel
+      data={data}
+      accountIdLabel={accountIdLabel}
+      onRefresh={() => void reload({ silent: true })}
+      isRefreshing={isLoading}
+    />
   );
 }

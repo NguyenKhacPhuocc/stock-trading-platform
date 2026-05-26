@@ -13,7 +13,8 @@ import { CashTransaction } from './cash-transaction.entity';
 /**
  * Snapshot số dư — luôn đồng bộ với ledger trong transaction NestJS.
  * Không cập nhật trực tiếp từ SQL tay; mọi biến động: insert cash_transactions + cập nhật 2 cột này.
- * Invariant: total = available_balance + locked_balance (cash_transactions.balance_after = total sau mỗi bút toán).
+ * Invariant: total = available_balance + locked_balance.
+ * Sao kê: available_after + balance_after (tổng) trên cash_transactions.
  */
 @Entity('wallets')
 export class Wallet {

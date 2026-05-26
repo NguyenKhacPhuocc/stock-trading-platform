@@ -4,7 +4,7 @@ import { priceBoardGridStyle } from './price-board-utils';
 /** Hai hàng header — bố cục giống stock-board MarketTable (24 cột). */
 export const PriceBoardTableHeader = memo(function PriceBoardTableHeader() {
   const cell =
-    'flex items-center justify-center border border-board-header-border bg-surface-2 py-0 text-[12px] font-normal text-muted';
+    'flex items-center justify-center border border-board-header-border bg-surface-2 py-0 text-sm font-normal text-muted';
   const group = `${cell} font-normal`;
 
   return (

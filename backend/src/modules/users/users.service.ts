@@ -145,11 +145,14 @@ export class UsersService {
   }
 
   /** Hook OTP liên hệ — hiện no-op; sau này verify contactOtpPhone / contactOtpEmail. */
-  private async verifyContactChangeOtp(
-    _userId: string,
-    _dto: UpdateProfileDto,
-  ): Promise<void> {
-    // TODO: if (phone/email changed) require OTP token valid for userId
+  private verifyContactChangeOtp(
+    userId: string,
+    dto: UpdateProfileDto,
+  ): void {
+    if (!userId) return;
+    if (dto.contactOtpPhone ?? dto.contactOtpEmail) {
+      // TODO: validate OTP token for userId before applying phone/email change
+    }
   }
 
   private async assertEmailAvailable(
@@ -202,7 +205,7 @@ export class UsersService {
       throw new BusinessException('PROFILE_IDENTITY_LOCKED');
     }
 
-    await this.verifyContactChangeOtp(userId, dto);
+    this.verifyContactChangeOtp(userId, dto);
 
     const patch: Partial<Pick<User, 'fullName' | 'phone' | 'email'>> = {};
     if (dto.fullName !== undefined) patch.fullName = dto.fullName.trim();
@@ -345,14 +348,9 @@ export class UsersService {
     userId: string,
     from?: string,
     to?: string,
-  ): Promise<
-    {
-      id: string;
-      loginAt: string;
-      ipAddress: string | null;
-      channel: string;
-    }[]
-  > {
+    limitRaw?: string,
+    offsetRaw?: string,
+  ) {
     const where: Record<string, unknown> = {
       actorUserId: userId,
       action: AuditAction.USER_LOGIN,
@@ -366,21 +364,29 @@ export class UsersService {
       where.createdAt = LessThanOrEqual(range.end);
     }
 
-    const rows = await this.auditRepo.find({
+    const limit = Math.min(
+      100,
+      Math.max(1, limitRaw ? parseInt(limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(0, offsetRaw ? parseInt(offsetRaw, 10) || 0 : 0);
+
+    const [rows, total] = await this.auditRepo.findAndCount({
       where,
       order: { createdAt: 'DESC' },
-      take: 200,
+      take: limit,
+      skip: offset,
     });
 
-    return rows.map((r) => {
+    const items = rows.map((r) => {
       const after = r.payloadAfter as {
         userAgent?: string;
         channel?: string;
         loginAtUtc?: string;
       } | null;
+      const channelKey = after?.channel;
       const channel =
-        after?.channel === 'app' || after?.channel === 'web'
-          ? loginChannelLabel(after.channel as 'web' | 'app')
+        channelKey === 'app' || channelKey === 'web'
+          ? loginChannelLabel(channelKey)
           : loginChannelLabel(loginChannelFromUserAgent(after?.userAgent ?? null));
       const loginAt =
         typeof after?.loginAtUtc === 'string' && after.loginAtUtc
@@ -393,20 +399,17 @@ export class UsersService {
         channel,
       };
     });
+
+    return { items, total, limit, offset };
   }
 
   async listProfileChangeHistory(
     userId: string,
     from?: string,
     to?: string,
-  ): Promise<
-    {
-      id: string;
-      changedAt: string;
-      before: Record<string, unknown> | null;
-      after: Record<string, unknown> | null;
-    }[]
-  > {
+    limitRaw?: string,
+    offsetRaw?: string,
+  ) {
     const where: Record<string, unknown> = {
       actorUserId: userId,
       action: AuditAction.USER_PROFILE_UPDATE,
@@ -420,17 +423,26 @@ export class UsersService {
       where.createdAt = LessThanOrEqual(range.end);
     }
 
-    const rows = await this.auditRepo.find({
+    const limit = Math.min(
+      100,
+      Math.max(1, limitRaw ? parseInt(limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(0, offsetRaw ? parseInt(offsetRaw, 10) || 0 : 0);
+
+    const [rows, total] = await this.auditRepo.findAndCount({
       where,
       order: { createdAt: 'DESC' },
-      take: 200,
+      take: limit,
+      skip: offset,
     });
 
-    return rows.map((r) => ({
+    const items = rows.map((r) => ({
       id: r.id,
       changedAt: toUtcIsoString(r.createdAt),
       before: r.payloadBefore,
       after: r.payloadAfter,
     }));
+
+    return { items, total, limit, offset };
   }
 }

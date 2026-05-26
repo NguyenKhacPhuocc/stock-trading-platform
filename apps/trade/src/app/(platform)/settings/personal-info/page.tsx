@@ -41,7 +41,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const panel =
   'rounded-lg border border-border bg-[#0b0d11] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]';
 const inputEditable =
-  'w-full rounded border border-border bg-background px-3 py-2 text-[12px] text-foreground outline-none transition-shadow focus:border-primary/60 focus:shadow-[0_0_0_2px_rgba(33,206,60,0.15)]';
+  'w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-shadow focus:border-primary/60 focus:shadow-[0_0_0_2px_rgba(33,206,60,0.15)]';
 
 function kycBadgeClass(status: KycStatus): string {
   if (status === 'simulated_verified') {
@@ -68,7 +68,7 @@ function InfoRow({
         {label}
       </dt>
       <dd
-        className={`text-[12px] text-foreground ${mono ? 'font-mono' : ''} ${value ? '' : 'text-muted/60'}`}
+        className={`text-sm text-foreground ${mono ? 'font-mono' : ''} ${value ? '' : 'text-muted/60'}`}
       >
         {value || '—'}
       </dd>
@@ -231,7 +231,7 @@ export default function AccountInfoPage() {
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="text-[14px] font-semibold text-foreground">Thông tin cá nhân</h1>
-          <p className="mt-0.5 text-[12px] text-muted">
+          <p className="mt-0.5 text-sm text-muted">
             Mã khách hàng{' '}
             <span className="font-mono text-foreground">{custId}</span>
           </p>
@@ -303,7 +303,7 @@ export default function AccountInfoPage() {
             onSubmit={(e) => void handleSaveProfile(e)}
           >
             <div className="grid flex-1 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1">
-              <label className="block text-[12px] text-muted">
+              <label className="block text-sm text-muted">
                 Số điện thoại
                 <input
                   type="tel"
@@ -315,7 +315,7 @@ export default function AccountInfoPage() {
                   autoComplete="tel"
                 />
               </label>
-              <label className="block text-[12px] text-muted">
+              <label className="block text-sm text-muted">
                 Email
                 <input
                   type="email"
@@ -333,7 +333,7 @@ export default function AccountInfoPage() {
               <button
                 type="submit"
                 disabled={busy || !profile}
-                className="rounded-md bg-primary px-5 py-2 text-[12px] font-medium text-black transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+                className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-black transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
               >
                 {isSavingProfile ? 'Đang lưu...' : 'Lưu thông tin liên hệ'}
               </button>

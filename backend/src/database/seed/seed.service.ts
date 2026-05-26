@@ -36,11 +36,8 @@ export class SeedService implements OnApplicationBootstrap {
     @InjectRepository(SystemConfig)
     private configRepo: Repository<SystemConfig>,
     @InjectRepository(User) private userRepo: Repository<User>,
-    @InjectRepository(CustomerProfile)
-    private profileRepo: Repository<CustomerProfile>,
     @InjectRepository(TradingAccount)
     private accountRepo: Repository<TradingAccount>,
-    @InjectRepository(Wallet) private walletRepo: Repository<Wallet>,
     @InjectRepository(Position) private positionRepo: Repository<Position>,
     private readonly dataSource: DataSource,
     private readonly walletService: WalletService,
@@ -117,7 +114,7 @@ export class SeedService implements OnApplicationBootstrap {
     });
   }
 
-  /** TK seed đã tạo trước đó (số dư 0) — bổ sung quà khi restart. */
+  /** TK seed: bổ sung quà cổ phiếu nếu thiếu — không đụng số dư tiền. */
   private async backfillSeedAccountGifts() {
     for (const custId of SEED_CUST_IDS) {
       const user = await this.userRepo.findOne({ where: { custId } });
@@ -128,17 +125,10 @@ export class SeedService implements OnApplicationBootstrap {
       });
       if (!account) continue;
 
-      const wallet = await this.walletRepo.findOne({
-        where: { tradingAccountId: account.id },
-      });
-      if (!wallet) continue;
-
       await this.dataSource.transaction(async (manager) => {
-        const managedWallet = await manager.findOne(Wallet, {
-          where: { id: wallet.id },
+        await this.walletService.ensureRegisterGiftStock(manager, account.id, {
+          throwIfStockMissing: false,
         });
-        if (!managedWallet) return;
-        await this.walletService.backfillGiftIfNeeded(manager, managedWallet);
       });
     }
   }
@@ -156,7 +146,6 @@ export class SeedService implements OnApplicationBootstrap {
     if (existing) return;
 
     const passwordHash = await bcrypt.hash(opts.password, 10);
-    const initialBalance = this.walletService.getInitialWalletBalance();
 
     await this.dataSource.transaction(async (manager) => {
       const user = await manager.save(
@@ -191,24 +180,21 @@ export class SeedService implements OnApplicationBootstrap {
         }),
       );
 
-      const wallet = await manager.save(
+      await manager.save(
         manager.create(Wallet, {
           tradingAccountId: account.id,
-          availableBalance: initialBalance,
+          availableBalance: 0,
           lockedBalance: 0,
         }),
       );
 
-      await this.walletService.applyNewAccountGift(
-        manager,
-        wallet,
-        initialBalance,
-        { throwIfStockMissing: false },
-      );
+      await this.walletService.ensureRegisterGiftStock(manager, account.id, {
+        throwIfStockMissing: false,
+      });
     });
 
     this.logger.log(
-      `Seed user: ${opts.custId} / TK ${opts.custId}.1 (${opts.role}) — ${initialBalance} VND + quà cổ phiếu`,
+      `Seed user: ${opts.custId} / TK ${opts.custId}.1 (${opts.role}) — ví 0 VND, quà CP nếu có`,
     );
   }
 }

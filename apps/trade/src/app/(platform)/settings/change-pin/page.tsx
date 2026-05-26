@@ -7,7 +7,7 @@ import { useRequireAuth } from '@/hooks/use-require-auth';
 
 const panelCard = 'rounded-md border border-border bg-[#0b0d11]';
 const inputClass =
-  'w-full rounded border border-border bg-background px-3 py-2 text-[12px] tracking-[0.35em] text-foreground outline-none transition-shadow focus:border-primary/60 focus:shadow-[0_0_0_2px_rgba(33,206,60,0.15)] [-webkit-text-security:disc]';
+  'w-full rounded border border-border bg-background px-3 py-2 text-sm tracking-[0.35em] text-foreground outline-none transition-shadow focus:border-primary/60 focus:shadow-[0_0_0_2px_rgba(33,206,60,0.15)] [-webkit-text-security:disc]';
 
 function PinField({
   label,
@@ -21,7 +21,7 @@ function PinField({
   disabled?: boolean;
 }) {
   return (
-    <label className="block text-[12px] text-muted">
+    <label className="block text-sm text-muted">
       {label}
       <input
         type="text"
@@ -82,8 +82,8 @@ export default function ChangePinPage() {
     <div className="p-4 md:p-6">
       <div className="mx-auto max-w-xl space-y-4">
         <header>
-          <h1 className="text-[12px] font-semibold text-foreground">Đổi mã PIN</h1>
-          <p className="mt-1 text-[12px] text-muted">
+          <h1 className="text-sm font-semibold text-foreground">Đổi mã PIN</h1>
+          <p className="mt-1 text-sm text-muted">
             Mã PIN giao dịch 6 chữ số dùng khi xác nhận đặt lệnh.
           </p>
         </header>
@@ -106,14 +106,14 @@ export default function ChangePinPage() {
                   setPin('');
                   setConfirmPin('');
                 }}
-                className="rounded border border-border px-4 py-2 text-[12px] text-foreground hover:bg-surface-2 disabled:opacity-50"
+                className="rounded border border-border px-4 py-2 text-sm text-foreground hover:bg-surface-2 disabled:opacity-50"
               >
                 Làm mới
               </button>
               <button
                 type="submit"
                 disabled={busy}
-                className="rounded bg-primary px-4 py-2 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                className="rounded bg-primary px-4 py-2 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
               >
                 {busy ? 'Đang lưu...' : 'Tiếp tục'}
               </button>

@@ -27,10 +27,17 @@ export class CashTransaction {
   @Column({ type: 'numeric', precision: 20, scale: 2 })
   amount: number;
 
-  /**
-   * Tổng tiền sau bút toán = available_balance + locked_balance tại wallets
-   * (dùng đối soát ledger vs snapshot; không sửa tay trong DB).
-   */
+  /** Số dư khả dụng sau bút toán. */
+  @Column({
+    name: 'available_after',
+    type: 'numeric',
+    precision: 20,
+    scale: 2,
+    nullable: true,
+  })
+  availableAfter: number | null;
+
+  /** Tổng tiền (khả dụng + phong tỏa) sau bút toán. */
   @Column({ name: 'balance_after', type: 'numeric', precision: 20, scale: 2 })
   balanceAfter: number;
 
@@ -40,7 +47,7 @@ export class CashTransaction {
   @Column({ nullable: true, type: 'text' })
   description: string | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @ManyToOne(() => Wallet, (w) => w.transactions)

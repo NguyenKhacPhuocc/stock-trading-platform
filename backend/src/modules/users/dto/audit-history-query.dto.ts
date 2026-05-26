@@ -1,4 +1,4 @@
-import { IsOptional, IsDateString } from 'class-validator';
+import { IsOptional, IsDateString, IsString } from 'class-validator';
 
 export class AuditHistoryQueryDto {
   @IsOptional()
@@ -8,4 +8,12 @@ export class AuditHistoryQueryDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  @IsOptional()
+  @IsString()
+  limit?: string;
+
+  @IsOptional()
+  @IsString()
+  offset?: string;
 }

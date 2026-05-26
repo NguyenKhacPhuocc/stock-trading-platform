@@ -38,17 +38,16 @@ export async function GET(req: NextRequest) {
   const origin = gatewayBackendOrigin();
 
   try {
-    const upstream = await fetch(
-      `${origin}/api/orders?tradingAccountId=${encodeURIComponent(tradingAccountId)}`,
-      {
+    const qs = new URLSearchParams(req.nextUrl.searchParams);
+    qs.set('tradingAccountId', tradingAccountId);
+    const upstream = await fetch(`${origin}/api/orders?${qs.toString()}`, {
       method: 'GET',
       signal: ac.signal,
-        headers: {
-          Accept: 'application/json',
-          Cookie: req.headers.get('cookie') ?? '',
-        },
+      headers: {
+        Accept: 'application/json',
+        Cookie: req.headers.get('cookie') ?? '',
       },
-    );
+    });
 
     const text = await upstream.text();
     const body = toBodyOrNull(text);
@@ -57,11 +56,14 @@ export async function GET(req: NextRequest) {
       return gwResError(em, { httpStatus: upstream.status, ec: upstream.status });
     }
 
-    if (Array.isArray(body)) return gwResSuccess(body);
     if (body && typeof body === 'object' && 'd' in body) {
       return gwResSuccess((body as { d: unknown }).d);
     }
-    return gwResSuccess([]);
+    if (Array.isArray(body)) return gwResSuccess(body);
+    if (body && typeof body === 'object' && 'items' in body) {
+      return gwResSuccess(body);
+    }
+    return gwResSuccess({ items: [], total: 0, limit: 30, offset: 0 });
   } catch (e) {
     return gatewayUpstreamCatch(e, {
       timeout: 'Hết thời gian chờ danh sách lệnh',

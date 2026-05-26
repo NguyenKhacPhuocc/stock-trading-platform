@@ -38,7 +38,7 @@ export default function NotifyAccountPage() {
     <div className="p-4 md:p-6">
       <div className="mx-auto max-w-xl space-y-4">
         <header>
-          <h1 className="text-[12px] font-semibold text-foreground">
+          <h1 className="text-sm font-semibold text-foreground">
             Thiết lập thông báo tài khoản
           </h1>
         </header>
@@ -46,7 +46,7 @@ export default function NotifyAccountPage() {
           {OPTIONS.map((opt) => (
             <label
               key={opt.key}
-              className="flex cursor-pointer items-center gap-2 text-[12px] text-foreground"
+              className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
             >
               <input
                 type="checkbox"
@@ -60,7 +60,7 @@ export default function NotifyAccountPage() {
           <button
             type="button"
             onClick={handleSave}
-            className="mt-2 rounded bg-primary px-4 py-2 text-[12px] font-medium text-black hover:opacity-90"
+            className="mt-2 rounded bg-primary px-4 py-2 text-sm font-medium text-black hover:opacity-90"
           >
             Lưu thay đổi
           </button>

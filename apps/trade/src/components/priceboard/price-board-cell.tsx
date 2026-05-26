@@ -124,7 +124,7 @@ export const PriceBoardCell = memo(function PriceBoardCell({
   return (
     <div
       ref={cellRef}
-      className={`flex h-7 min-h-7 items-center border-r border-b border-border/80 bg-background px-1 py-0.5 text-[12px] tabular-nums group-hover/row:bg-border last:border-r-0 ${alignCls} ${toneCls} ${className}`.trim()}
+      className={`flex h-7 min-h-7 items-center border-r border-b border-border/80 bg-background px-1 py-0.5 text-sm tabular-nums group-hover/row:bg-border last:border-r-0 ${alignCls} ${toneCls} ${className}`.trim()}
     >
       {display}
     </div>

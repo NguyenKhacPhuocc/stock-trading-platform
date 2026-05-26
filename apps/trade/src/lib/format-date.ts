@@ -32,7 +32,7 @@ export function formatDateOnly(value: string | Date | null | undefined): string 
   }
 }
 
-const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+const VN_TZ = 'Asia/Ho_Chi_Minh';
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
@@ -50,12 +50,24 @@ export function parseApiInstant(value: string | Date): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+const vnDateTimeFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: VN_TZ,
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
 /** Ngày giờ đầy đủ theo múi giờ Việt Nam (UTC+7 / GMT+7). */
 export function formatDateTimeVN(isoString: string | Date): string {
   const ms = parseApiInstant(isoString);
   if (ms == null) return '—';
-  const vn = new Date(ms + VN_OFFSET_MS);
-  return `${pad2(vn.getUTCDate())}/${pad2(vn.getUTCMonth() + 1)}/${vn.getUTCFullYear()} ${pad2(vn.getUTCHours())}:${pad2(vn.getUTCMinutes())}`;
+  const parts = vnDateTimeFmt.formatToParts(new Date(ms));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}`;
 }
 
 export function formatDateTimeCompact(isoString: string | Date): string {

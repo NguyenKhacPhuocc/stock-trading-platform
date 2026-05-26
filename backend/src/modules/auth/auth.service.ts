@@ -146,20 +146,17 @@ export class AuthService {
             }),
           );
 
-          const initialWalletBalance =
-            this.walletService.getInitialWalletBalance();
-          const wallet = await manager.save(
+          await manager.save(
             manager.create(Wallet, {
               tradingAccountId: account.id,
-              availableBalance: initialWalletBalance,
+              availableBalance: 0,
               lockedBalance: 0,
             }),
           );
 
-          await this.walletService.applyNewAccountGift(
+          await this.walletService.ensureRegisterGiftStock(
             manager,
-            wallet,
-            initialWalletBalance,
+            account.id,
             { throwIfStockMissing: true },
           );
 

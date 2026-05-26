@@ -45,6 +45,7 @@ import { OrderbookWalService } from './orderbook-wal.service';
 import { OrderbookWsService } from './orderbook-ws.service';
 import { AppGateway } from '../../websocket/app.gateway';
 import { bookOrdersLine, orderRef } from './util/order-flow-log.util';
+import { walletLedgerSnapshot } from '../../common/utils/wallet-ledger-snapshot.util';
 
 /**
  * Khớp lệnh: BullMQ → SymbolBook (RAM) → TradeFillService (DB) → WAL/Redis/WS.
@@ -456,8 +457,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
             walletId: wallet.id,
             type: TransactionType.BUY_UNLOCK,
             amount: lockedAmount,
-            balanceAfter:
-              Number(wallet.availableBalance) + Number(wallet.lockedBalance),
+            ...walletLedgerSnapshot(wallet),
             refOrderId: order.id,
             description: `MAK hủy phần dư ${remainingQty} ${symbol}`,
           }),

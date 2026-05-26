@@ -11,9 +11,9 @@ export default function ContactPage() {
     <div className="p-4 md:p-6">
       <div className="mx-auto max-w-2xl space-y-4">
         <header>
-          <h1 className="text-[12px] font-semibold text-foreground">Liên hệ</h1>
+          <h1 className="text-sm font-semibold text-foreground">Liên hệ</h1>
         </header>
-        <section className={`${panelCard} grid gap-6 text-[12px] sm:grid-cols-2`}>
+        <section className={`${panelCard} grid gap-6 text-sm sm:grid-cols-2`}>
           <div>
             <h2 className="font-semibold text-foreground">Hỗ trợ khách hàng</h2>
             <p className="mt-2 text-muted">Hotline: 1900 0000 (mô phỏng)</p>

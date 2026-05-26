@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import { DEFAULT_STOCK_BOARD_ID, TransactionType } from '../../common/const';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Position } from '../../database/entities/position.entity';
@@ -14,7 +14,20 @@ import type {
   PortfolioOverviewDto,
   PortfolioPositionRowDto,
 } from './dto/portfolio-overview.dto';
+import type { CashStatementDto } from './dto/cash-statement.dto';
+import type { StockStatementDto } from './dto/stock-statement.dto';
+import type { SellFillsDto } from './dto/sell-fills.dto';
+import { PositionTransaction } from '../../database/entities/position-transaction.entity';
+import { Order } from '../../database/entities/order.entity';
+import { backfillPositionLedgerForAccount } from './util/position-ledger-backfill.util';
+import { StockLedgerType } from '../../common/const/stock-ledger';
+import { recordPositionLedger } from '../../common/utils/record-position-ledger.util';
 import { resolveTradingAccountForUser } from '../../common/utils/resolve-trading-account.util';
+import { walletLedgerSnapshot } from '../../common/utils/wallet-ledger-snapshot.util';
+import { vnDateRangeToUtcBounds, toUtcIsoString } from '../../common/utils/vn-time.util';
+import { Trade } from '../../database/entities/trade.entity';
+import { backfillMissingTradeRealizedPnl } from './util/trade-realized-pnl-backfill.util';
+import type { SellFillsBySymbolDto } from './dto/sell-fills.dto';
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -37,8 +50,31 @@ export class WalletService {
     private accountRepo: Repository<TradingAccount>,
     @InjectRepository(StockBoardSnapshot)
     private snapshotRepo: Repository<StockBoardSnapshot>,
+    @InjectRepository(CashTransaction)
+    private cashTxRepo: Repository<CashTransaction>,
+    @InjectRepository(Trade)
+    private tradeRepo: Repository<Trade>,
+    @InjectRepository(PositionTransaction)
+    private positionTxRepo: Repository<PositionTransaction>,
+    @InjectRepository(Order)
+    private orderRepo: Repository<Order>,
     private readonly config: ConfigService,
   ) {}
+
+  private async ensurePositionLedgerBackfill(
+    tradingAccountId: string,
+  ): Promise<void> {
+    const n = await backfillPositionLedgerForAccount(
+      this.positionTxRepo,
+      this.orderRepo,
+      this.tradeRepo,
+      this.positionRepo,
+      tradingAccountId,
+    );
+    if (n > 0) {
+      this.logger.log(`Backfill sao kê CP: ${n} dòng cho TK ${tradingAccountId}`);
+    }
+  }
 
   async getWallet(userId: string, tradingAccountId: string) {
     const account = await resolveTradingAccountForUser(
@@ -60,6 +96,377 @@ export class WalletService {
       ...wallet,
       accountId: account.accountId,
       totalBalance: available + locked,
+    };
+  }
+
+  async getCashStatement(
+    userId: string,
+    tradingAccountId: string,
+    from?: string,
+    to?: string,
+    limitRaw?: string,
+    offsetRaw?: string,
+  ): Promise<CashStatementDto> {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
+    const wallet = await this.walletRepo.findOne({
+      where: { tradingAccountId: account.id },
+    });
+    if (!wallet) {
+      throw new BusinessException('WALLET_NOT_FOUND', undefined, 404);
+    }
+
+    const range = vnDateRangeToUtcBounds(from, to);
+    const limit = Math.min(
+      100,
+      Math.max(1, limitRaw ? parseInt(limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(0, offsetRaw ? parseInt(offsetRaw, 10) || 0 : 0);
+
+    const qb = this.cashTxRepo
+      .createQueryBuilder('tx')
+      .where('tx.walletId = :walletId', { walletId: wallet.id })
+      .orderBy('tx.createdAt', 'DESC');
+
+    if (range.start) {
+      qb.andWhere('tx.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('tx.createdAt <= :end', { end: range.end });
+    }
+
+    const sumQb = this.cashTxRepo
+      .createQueryBuilder('tx')
+      .select(
+        'COALESCE(SUM(CASE WHEN tx.amount > 0 THEN tx.amount ELSE 0 END), 0)',
+        'totalIn',
+      )
+      .addSelect(
+        'COALESCE(SUM(CASE WHEN tx.amount < 0 THEN tx.amount ELSE 0 END), 0)',
+        'totalOut',
+      )
+      .where('tx.walletId = :walletId', { walletId: wallet.id });
+    if (range.start) {
+      sumQb.andWhere('tx.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      sumQb.andWhere('tx.createdAt <= :end', { end: range.end });
+    }
+    const sumRaw = await sumQb.getRawOne<{
+      totalIn: string;
+      totalOut: string;
+    }>();
+    const totalIn = toNum(sumRaw?.totalIn);
+    const totalOut = toNum(sumRaw?.totalOut);
+
+    const [rows, total] = await qb
+      .take(limit)
+      .skip(offset)
+      .getManyAndCount();
+
+    return {
+      accountId: account.accountId,
+      items: rows.map((tx) => ({
+        id: tx.id,
+        createdAt: toUtcIsoString(tx.createdAt),
+        type: tx.type,
+        amount: toNum(tx.amount),
+        availableAfter: toNum(
+          tx.availableAfter != null ? tx.availableAfter : tx.balanceAfter,
+        ),
+        balanceAfter: toNum(tx.balanceAfter),
+        description: tx.description,
+        refOrderId: tx.refOrderId,
+      })),
+      total,
+      limit,
+      offset,
+      summary: {
+        totalIn,
+        totalOut,
+        netFlow: totalIn + totalOut,
+      },
+    };
+  }
+
+  /** Sao kê biến động khối lượng CP theo tiểu khoản. */
+  async getStockStatement(
+    userId: string,
+    tradingAccountId: string,
+    from?: string,
+    to?: string,
+    limitRaw?: string,
+    offsetRaw?: string,
+    symbol?: string,
+  ): Promise<StockStatementDto> {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
+    await this.ensurePositionLedgerBackfill(account.id);
+
+    const range = vnDateRangeToUtcBounds(from, to);
+    const limit = Math.min(
+      100,
+      Math.max(1, limitRaw ? parseInt(limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(0, offsetRaw ? parseInt(offsetRaw, 10) || 0 : 0);
+    const sym = symbol?.trim().toUpperCase();
+
+    const qb = this.positionTxRepo
+      .createQueryBuilder('tx')
+      .leftJoinAndSelect('tx.stock', 'stock')
+      .where('tx.tradingAccountId = :aid', { aid: account.id })
+      .orderBy('tx.createdAt', 'DESC');
+
+    if (range.start) {
+      qb.andWhere('tx.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('tx.createdAt <= :end', { end: range.end });
+    }
+    if (sym) {
+      qb.andWhere('UPPER(stock.symbol) = :sym', { sym });
+    }
+
+    const netExpr = '(tx.quantity_delta + tx.locked_delta)';
+    const sumQb = this.positionTxRepo
+      .createQueryBuilder('tx')
+      .leftJoin('tx.stock', 'stock')
+      .select(
+        `COALESCE(SUM(CASE WHEN ${netExpr} > 0 THEN ${netExpr} ELSE 0 END), 0)`,
+        'totalIncrease',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${netExpr} < 0 THEN ${netExpr} ELSE 0 END), 0)`,
+        'totalDecrease',
+      )
+      .where('tx.tradingAccountId = :aid', { aid: account.id });
+    if (range.start) {
+      sumQb.andWhere('tx.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      sumQb.andWhere('tx.createdAt <= :end', { end: range.end });
+    }
+    if (sym) {
+      sumQb.andWhere('UPPER(stock.symbol) = :sym', { sym });
+    }
+    const sumRaw = await sumQb.getRawOne<{
+      totalIncrease: string;
+      totalDecrease: string;
+    }>();
+    const totalIncrease = toNum(sumRaw?.totalIncrease);
+    const totalDecrease = toNum(sumRaw?.totalDecrease);
+
+    const [rows, total] = await qb.take(limit).skip(offset).getManyAndCount();
+
+    return {
+      accountId: account.accountId,
+      items: rows.map((tx) => {
+        const quantityAfter = Number(tx.quantityAfter) || 0;
+        const lockedAfter = Number(tx.lockedAfter) || 0;
+        return {
+          id: tx.id,
+          createdAt: toUtcIsoString(tx.createdAt),
+          symbol: tx.stock?.symbol ?? '—',
+          type: tx.type,
+          quantityDelta: Number(tx.quantityDelta) || 0,
+          lockedDelta: Number(tx.lockedDelta) || 0,
+          quantityAfter,
+          lockedAfter,
+          totalAfter: quantityAfter + lockedAfter,
+          description: tx.description,
+          refOrderId: tx.refOrderId,
+        };
+      }),
+      total,
+      limit,
+      offset,
+      summary: {
+        totalIncrease,
+        totalDecrease,
+        netQuantity: totalIncrease + totalDecrease,
+      },
+    };
+  }
+
+  private async ensureTradeRealizedPnlBackfill(): Promise<void> {
+    const nullCount = await this.tradeRepo.count({
+      where: { costBasisPrice: IsNull() },
+    });
+    if (nullCount === 0) return;
+    const n = await backfillMissingTradeRealizedPnl(
+      this.tradeRepo,
+      this.positionRepo,
+    );
+    if (n > 0) {
+      this.logger.log(`Backfill giá vốn/Lãi/Lỗ đã thực hiện cho ${n} khớp bán`);
+    }
+  }
+
+  /** Khớp bán + lãi/lỗ đã thực hiện (WAC tại thời điểm bán). */
+  async getSellFills(
+    userId: string,
+    tradingAccountId: string,
+    from?: string,
+    to?: string,
+    limitRaw?: string,
+    offsetRaw?: string,
+  ): Promise<SellFillsDto> {
+    await this.ensureTradeRealizedPnlBackfill();
+
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
+    const range = vnDateRangeToUtcBounds(from, to);
+    const limit = Math.min(
+      100,
+      Math.max(1, limitRaw ? parseInt(limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(0, offsetRaw ? parseInt(offsetRaw, 10) || 0 : 0);
+
+    const sumQb = this.tradeRepo
+      .createQueryBuilder('t')
+      .innerJoin('t.sellOrder', 'o')
+      .where('o.tradingAccountId = :aid', { aid: account.id });
+    if (range.start) {
+      sumQb.andWhere('t.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      sumQb.andWhere('t.createdAt <= :end', { end: range.end });
+    }
+    const sumRaw = await sumQb
+      .select('COUNT(*)', 'tradeCount')
+      .addSelect('COALESCE(SUM(t.trade_value), 0)', 'totalSellValue')
+      .addSelect(
+        `COALESCE(SUM(
+          CASE WHEN t.cost_basis_price IS NOT NULL
+            THEN t.cost_basis_price * t.quantity ELSE 0 END
+        ), 0)`,
+        'totalCostAmount',
+      )
+      .addSelect(
+        `COALESCE(SUM(
+          CASE
+            WHEN t.realized_pnl IS NOT NULL THEN t.realized_pnl
+            WHEN t.cost_basis_price IS NOT NULL
+              THEN (t.price - t.cost_basis_price) * t.quantity
+            ELSE 0
+          END
+        ), 0)`,
+        'totalRealizedPnL',
+      )
+      .getRawOne<{
+        tradeCount: string;
+        totalSellValue: string;
+        totalCostAmount: string;
+        totalRealizedPnL: string;
+      }>();
+
+    const qb = this.tradeRepo
+      .createQueryBuilder('t')
+      .innerJoinAndSelect('t.sellOrder', 'o')
+      .leftJoinAndSelect('o.stock', 'stock')
+      .where('o.tradingAccountId = :aid', { aid: account.id })
+      .orderBy('t.createdAt', 'DESC');
+    if (range.start) {
+      qb.andWhere('t.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('t.createdAt <= :end', { end: range.end });
+    }
+
+    const [rows, total] = await qb.take(limit).skip(offset).getManyAndCount();
+
+    const bySymbolQb = this.tradeRepo
+      .createQueryBuilder('t')
+      .innerJoin('t.sellOrder', 'o')
+      .leftJoin('o.stock', 'stock')
+      .where('o.tradingAccountId = :aid', { aid: account.id })
+      .andWhere('t.cost_basis_price IS NOT NULL');
+    if (range.start) {
+      bySymbolQb.andWhere('t.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      bySymbolQb.andWhere('t.createdAt <= :end', { end: range.end });
+    }
+    const bySymbolRaw = await bySymbolQb
+      .select('COALESCE(stock.symbol, \'—\')', 'symbol')
+      .addSelect('COUNT(*)', 'tradeCount')
+      .addSelect('COALESCE(SUM(t.quantity), 0)', 'quantity')
+      .addSelect('COALESCE(SUM(t.trade_value), 0)', 'sellValue')
+      .addSelect(
+        'COALESCE(SUM(t.cost_basis_price * t.quantity), 0)',
+        'costAmount',
+      )
+      .addSelect('COALESCE(SUM(t.realized_pnl), 0)', 'realizedPnL')
+      .groupBy('stock.symbol')
+      .orderBy('COALESCE(SUM(t.realized_pnl), 0)', 'DESC')
+      .getRawMany<{
+        symbol: string;
+        tradeCount: string;
+        quantity: string;
+        sellValue: string;
+        costAmount: string;
+        realizedPnL: string;
+      }>();
+
+    const bySymbol: SellFillsBySymbolDto[] = bySymbolRaw.map((r) => {
+      const costAmount = toNum(r.costAmount);
+      const realizedPnL = toNum(r.realizedPnL);
+      return {
+        symbol: r.symbol,
+        tradeCount: Number(r.tradeCount) || 0,
+        quantity: Number(r.quantity) || 0,
+        sellValue: toNum(r.sellValue),
+        costAmount,
+        realizedPnL,
+      };
+    });
+
+    return {
+      accountId: account.accountId,
+      items: rows.map((t) => {
+        const qty = Number(t.quantity) || 0;
+        const price = toNum(t.price);
+        const tradeValue = toNum(t.tradeValue);
+        const costBasisPrice = toNum(t.costBasisPrice);
+        const costAmount = costBasisPrice * qty;
+        const realizedPnL =
+          t.realizedPnL != null
+            ? toNum(t.realizedPnL)
+            : costBasisPrice > 0
+              ? (price - costBasisPrice) * qty
+              : 0;
+        return {
+          id: t.id,
+          tradedAt: toUtcIsoString(t.createdAt),
+          symbol: t.sellOrder?.stock?.symbol ?? '—',
+          quantity: qty,
+          price,
+          tradeValue,
+          costBasisPrice,
+          costAmount,
+          realizedPnL,
+          realizedPnLPercent: pctChange(realizedPnL, costAmount),
+        };
+      }),
+      total,
+      limit,
+      offset,
+      summary: {
+        tradeCount: Number(sumRaw?.tradeCount) || 0,
+        totalSellValue: toNum(sumRaw?.totalSellValue),
+        totalCostAmount: toNum(sumRaw?.totalCostAmount),
+        totalRealizedPnL: toNum(sumRaw?.totalRealizedPnL),
+      },
+      bySymbol,
     };
   }
 
@@ -202,64 +609,16 @@ export class WalletService {
     });
   }
 
-  getInitialWalletBalance(): number {
-    const raw = this.config.get<string>('INITIAL_WALLET_BALANCE');
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-    return 50_000_000;
-  }
-
-  /** Ledger nạp tiền + position quà — dùng khi tạo TK mới (đăng ký / seed). */
-  async applyNewAccountGift(
+  /**
+   * Quà cổ phiếu đăng ký (nếu cấu hình) — không nạp tiền.
+   * Nạp tiền chỉ qua API nạp riêng (sẽ triển khai).
+   */
+  async ensureRegisterGiftStock(
     manager: EntityManager,
-    wallet: Wallet,
-    balance: number,
+    tradingAccountId: string,
     options?: { throwIfStockMissing?: boolean },
   ): Promise<void> {
-    await manager.save(
-      manager.create(CashTransaction, {
-        walletId: wallet.id,
-        type: TransactionType.DEPOSIT,
-        amount: balance,
-        balanceAfter: balance,
-        description: 'Tiền khởi tạo tài khoản',
-      }),
-    );
-
-    await this.ensureGiftPosition(manager, wallet.tradingAccountId, options);
-  }
-
-  /** Bổ sung quà cho TK seed cũ (số dư 0 / chưa có VCB). */
-  async backfillGiftIfNeeded(
-    manager: EntityManager,
-    wallet: Wallet,
-  ): Promise<void> {
-    const targetBalance = this.getInitialWalletBalance();
-    const current = Number(wallet.availableBalance);
-
-    if (current < targetBalance) {
-      const topUp = targetBalance - current;
-      wallet.availableBalance = targetBalance;
-      wallet.lockedBalance = Number(wallet.lockedBalance);
-      await manager.save(Wallet, wallet);
-      await manager.save(
-        manager.create(CashTransaction, {
-          walletId: wallet.id,
-          type: TransactionType.DEPOSIT,
-          amount: topUp,
-          balanceAfter:
-            Number(wallet.availableBalance) + Number(wallet.lockedBalance),
-          description: 'Bổ sung tiền khởi tạo tài khoản',
-        }),
-      );
-      this.logger.log(
-        `Backfill tiền ví ${wallet.id}: +${topUp} → ${targetBalance}`,
-      );
-    }
-
-    await this.ensureGiftPosition(manager, wallet.tradingAccountId, {
-      throwIfStockMissing: false,
-    });
+    await this.ensureGiftPosition(manager, tradingAccountId, options);
   }
 
   private getGiftStockQty(): number {
@@ -309,17 +668,28 @@ export class WalletService {
     });
     const avgPrice = snap ? Number(snap.referencePrice) : 0;
 
-    await manager.save(
+    const giftQty = this.getGiftStockQty();
+    const saved = await manager.save(
       manager.create(Position, {
         tradingAccountId,
         stockId: stock.id,
-        quantity: this.getGiftStockQty(),
+        quantity: giftQty,
         lockedQuantity: 0,
         avgPrice,
       }),
     );
+    await recordPositionLedger(manager, {
+      tradingAccountId,
+      stockId: stock.id,
+      type: StockLedgerType.GIFT,
+      quantityDelta: giftQty,
+      lockedDelta: 0,
+      quantityAfter: giftQty,
+      lockedAfter: 0,
+      description: `Quà cổ phiếu ${symbol} x${giftQty}`,
+    });
     this.logger.log(
-      `Quà cổ phiếu ${symbol} x${this.getGiftStockQty()} cho TK ${tradingAccountId}`,
+      `Quà cổ phiếu ${symbol} x${giftQty} cho TK ${tradingAccountId} (position ${saved.id})`,
     );
   }
 }

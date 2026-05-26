@@ -8,6 +8,7 @@ import { Stock } from './entities/stock.entity';
 import { Wallet } from './entities/wallet.entity';
 import { CashTransaction } from './entities/cash-transaction.entity';
 import { Position } from './entities/position.entity';
+import { PositionTransaction } from './entities/position-transaction.entity';
 import { Order } from './entities/order.entity';
 import { Trade } from './entities/trade.entity';
 import { PriceHistory } from './entities/price-history.entity';
@@ -30,6 +31,7 @@ export const ALL_ENTITIES = [
   Wallet,
   CashTransaction,
   Position,
+  PositionTransaction,
   Order,
   Trade,
   PriceHistory,

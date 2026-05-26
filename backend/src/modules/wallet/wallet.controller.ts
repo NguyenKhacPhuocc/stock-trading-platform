@@ -37,4 +37,63 @@ export class WalletController {
   ) {
     return this.wallet.getPortfolioOverview(user.id, tradingAccountId);
   }
+
+  @Get('cash-statement')
+  getCashStatement(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.wallet.getCashStatement(
+      user.id,
+      tradingAccountId,
+      from,
+      to,
+      limit,
+      offset,
+    );
+  }
+
+  @Get('stock-statement')
+  getStockStatement(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('symbol') symbol?: string,
+  ) {
+    return this.wallet.getStockStatement(
+      user.id,
+      tradingAccountId,
+      from,
+      to,
+      limit,
+      offset,
+      symbol,
+    );
+  }
+
+  @Get('sell-fills')
+  getSellFills(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.wallet.getSellFills(
+      user.id,
+      tradingAccountId,
+      from,
+      to,
+      limit,
+      offset,
+    );
+  }
 }

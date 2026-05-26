@@ -2,10 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { ListPagination } from '@/components/ui/list-pagination';
 import { GATEWAY_USERS } from '@/lib/gateway-paths';
 import { formatDateTimeVN } from '@/lib/format-date';
 import { formatLoginIpDisplay } from '@/lib/format-login-audit';
 import { defaultAuditDateRange } from '@/lib/default-date-range';
+import {
+  LIST_PAGE_SIZE,
+  pageToOffset,
+  parsePaginated,
+} from '@/lib/pagination';
 import { useRequireAuth } from '@/hooks/use-require-auth';
 
 type LoginRow = {
@@ -22,13 +28,22 @@ export default function LoginHistoryPage() {
   const initial = defaultAuditDateRange();
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
+  const [queryFrom, setQueryFrom] = useState(initial.from);
+  const [queryTo, setQueryTo] = useState(initial.to);
+  const [page, setPage] = useState(1);
   const [rows, setRows] = useState<LoginRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = new URLSearchParams({ from, to });
+      const qs = new URLSearchParams({
+        from: queryFrom,
+        to: queryTo,
+        limit: String(LIST_PAGE_SIZE),
+        offset: String(pageToOffset(page, LIST_PAGE_SIZE)),
+      });
       const res = await fetch(`${GATEWAY_USERS.loginHistory}?${qs}`, {
         credentials: 'same-origin',
       });
@@ -40,26 +55,35 @@ export default function LoginHistoryPage() {
       if (!res.ok || json?.s !== 'ok') {
         throw new Error(json?.em || 'Không tải được dữ liệu');
       }
-      setRows((json.d as LoginRow[]) ?? []);
+      const parsed = parsePaginated<LoginRow>(json.d);
+      setRows(parsed.items);
+      setTotal(parsed.total);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Lỗi tải dữ liệu');
     } finally {
       setLoading(false);
     }
-  }, [from, to, handleSessionExpired]);
+  }, [queryFrom, queryTo, page, handleSessionExpired]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  const onSearch = () => {
+    setQueryFrom(from);
+    setQueryTo(to);
+    setPage(1);
+  };
+
   return (
     <div className="p-4 md:p-6">
       <div className="mx-auto max-w-3xl space-y-4">
         <header>
-          <h1 className="text-[12px] font-semibold text-foreground">Lịch sử đăng nhập</h1>
+          <h1 className="text-sm font-semibold text-foreground">Lịch sử đăng nhập</h1>
+          <p className="mt-1 text-xs text-muted">{LIST_PAGE_SIZE} dòng/trang</p>
         </header>
 
-        <div className="flex flex-wrap items-end gap-3 text-[12px]">
+        <div className="flex flex-wrap items-end gap-3 text-sm">
           <label className="text-muted">
             Từ ngày
             <input
@@ -80,7 +104,7 @@ export default function LoginHistoryPage() {
           </label>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={onSearch}
             disabled={loading}
             className="rounded bg-primary px-4 py-2 font-medium text-black disabled:opacity-50"
           >
@@ -89,7 +113,7 @@ export default function LoginHistoryPage() {
         </div>
 
         <section className={`${panelCard} overflow-x-auto`}>
-          <table className="w-full min-w-[32rem] text-left text-[12px]">
+          <table className="w-full min-w-[32rem] text-left text-sm">
             <thead>
               <tr className="border-b border-border text-muted">
                 <th className="px-3 py-2 font-medium">Thời gian đăng nhập (GMT+7)</th>
@@ -119,6 +143,13 @@ export default function LoginHistoryPage() {
               )}
             </tbody>
           </table>
+          <ListPagination
+            page={page}
+            pageSize={LIST_PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+            disabled={loading}
+          />
         </section>
       </div>
     </div>

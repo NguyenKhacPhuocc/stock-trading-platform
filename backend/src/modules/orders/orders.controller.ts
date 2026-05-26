@@ -37,8 +37,21 @@ export class OrdersController {
   getMyOrders(
     @CurrentUser() user: { id: string },
     @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('status') status?: string,
+    @Query('symbol') symbol?: string,
   ) {
-    return this.orders.getUserOrders(user.id, tradingAccountId);
+    return this.orders.getUserOrders(user.id, tradingAccountId, {
+      from,
+      to,
+      limitRaw: limit,
+      offsetRaw: offset,
+      status,
+      symbol,
+    });
   }
 
   @Delete(':id')

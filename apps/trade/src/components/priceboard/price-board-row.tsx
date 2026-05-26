@@ -128,7 +128,7 @@ function SymbolCell({
       : 'ref';
 
   return (
-    <div className="sticky left-0 z-10 flex h-7 min-h-7 items-center justify-start border-r border-b border-border/80 bg-background px-1 py-0.5 text-left text-[12px] group-hover/row:bg-border">
+    <div className="sticky left-0 z-10 flex h-7 min-h-7 items-center justify-start border-r border-b border-border/80 bg-background px-1 py-0.5 text-left text-sm group-hover/row:bg-border">
       <span className="flex items-center gap-1">
         <PinIcon
           className={`h-4 w-4 shrink-0 cursor-pointer text-muted ${isPinned ? 'rotate-45 text-price-down' : ''}`}

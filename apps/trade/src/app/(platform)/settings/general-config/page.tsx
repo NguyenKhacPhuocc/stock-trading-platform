@@ -39,22 +39,22 @@ export default function GeneralConfigPage() {
     <div className="p-4 md:p-6">
       <div className="mx-auto max-w-xl space-y-4">
         <header>
-          <h1 className="text-[12px] font-semibold text-foreground">Cấu hình chung</h1>
+          <h1 className="text-sm font-semibold text-foreground">Cấu hình chung</h1>
         </header>
         <section className={`${panelCard} space-y-4`}>
-          <label className="block text-[12px] text-muted">
+          <label className="block text-sm text-muted">
             Ngôn ngữ
             <select
               value={locale}
               onChange={(e) => setLocale(e.target.value as TradeLocale)}
-              className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-[12px] text-foreground"
+              className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
             >
               <option value="vi">Tiếng Việt</option>
               <option value="en">English</option>
             </select>
           </label>
 
-          <label className="flex items-center justify-between gap-3 text-[12px] text-foreground">
+          <label className="flex items-center justify-between gap-3 text-sm text-foreground">
             <span>Hiển thị xác nhận lệnh cho lần sau</span>
             <input
               type="checkbox"
@@ -64,7 +64,7 @@ export default function GeneralConfigPage() {
             />
           </label>
 
-          <fieldset className="space-y-2 text-[12px]">
+          <fieldset className="space-y-2 text-sm">
             <legend className="text-muted">Giao diện</legend>
             <label className="flex items-center gap-2 text-foreground">
               <input
@@ -91,7 +91,7 @@ export default function GeneralConfigPage() {
           <button
             type="button"
             onClick={handleSave}
-            className="rounded bg-primary px-4 py-2 text-[12px] font-medium text-black hover:opacity-90"
+            className="rounded bg-primary px-4 py-2 text-sm font-medium text-black hover:opacity-90"
           >
             Lưu thay đổi
           </button>

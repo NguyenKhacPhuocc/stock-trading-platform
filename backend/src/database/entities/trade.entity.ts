@@ -43,7 +43,27 @@ export class Trade {
   @Column({ name: 'stock_id', type: 'uuid', nullable: true })
   stockId: string | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  /** Giá vốn bình quân tại thời điểm khớp (bên bán). */
+  @Column({
+    name: 'cost_basis_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    nullable: true,
+  })
+  costBasisPrice: number | null;
+
+  /** Lãi/lỗ đã thực hiện = (price − cost_basis_price) × quantity. */
+  @Column({
+    name: 'realized_pnl',
+    type: 'numeric',
+    precision: 20,
+    scale: 2,
+    nullable: true,
+  })
+  realizedPnL: number | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @ManyToOne(() => Order, (o) => o.buyTrades)

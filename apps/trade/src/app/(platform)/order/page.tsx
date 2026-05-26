@@ -21,6 +21,8 @@ import {
   filterOrderRows,
   type OrderListStatusFilter,
 } from '@/lib/filter-orders';
+import { parsePaginated } from '@/lib/pagination';
+import { dispatchPortfolioRefresh } from '@/lib/order-fill-notify';
 import { ORDERS_FOCUS_LIST_EVT } from '@/lib/order-fill-notify';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { GATEWAY_ORDERS, GATEWAY_WALLET } from '@/lib/gateway-paths';
@@ -136,10 +138,11 @@ export default function OrderPage() {
       if (isHydratingSession || !isAuthenticated || !selectedTradingAccountId) return;
       if (!opts?.silent) setIsLoadingOrders(true);
       try {
-        const res = await fetch(
-          withTradingAccountQuery(GATEWAY_ORDERS.list, selectedTradingAccountId),
-          { credentials: 'same-origin' },
+        const base = withTradingAccountQuery(
+          GATEWAY_ORDERS.list,
+          selectedTradingAccountId,
         );
+        const res = await fetch(`${base}&limit=200`, { credentials: 'same-origin' });
         if (res.status === 401) {
           handleSessionExpired();
           return;
@@ -148,10 +151,8 @@ export default function OrderPage() {
         if (!res.ok || json?.s !== 'ok') {
           throw new Error(json?.em || 'Không tải được danh sách lệnh');
         }
-        const items = Array.isArray(json?.d) ? json.d : [];
-        const mapped = items.map((item: Record<string, unknown>) =>
-          mapOrderListItem(item),
-        );
+        const parsed = parsePaginated<Record<string, unknown>>(json.d);
+        const mapped = parsed.items.map((item) => mapOrderListItem(item));
         setOrders(mapped);
       } catch (error) {
         const message =
@@ -428,6 +429,7 @@ export default function OrderPage() {
       setConfirmIntent(null);
       void reloadOrders({ silent: true });
       void reloadPortfolio();
+      dispatchPortfolioRefresh();
       toast.success('Đặt lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Đặt lệnh thất bại';
@@ -472,6 +474,7 @@ export default function OrderPage() {
       }
       void reloadOrders({ silent: true });
       void reloadPortfolio();
+      dispatchPortfolioRefresh();
       toast.success('Hủy lệnh thành công');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Hủy lệnh thất bại';

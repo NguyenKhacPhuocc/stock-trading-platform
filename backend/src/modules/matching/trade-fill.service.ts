@@ -10,6 +10,9 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import type { TradeFillPlan } from './dto/matching.dto';
 import type { OrderFillNotify } from './dto/order-fill-notify.dto';
 import { orderRef } from './util/order-flow-log.util';
+import { walletLedgerSnapshot } from '../../common/utils/wallet-ledger-snapshot.util';
+import { StockLedgerType } from '../../common/const/stock-ledger';
+import { recordPositionLedger } from '../../common/utils/record-position-ledger.util';
 
 /** Ghi khớp lệnh: orders, trades, ví, position. */
 @Injectable()
@@ -94,6 +97,19 @@ export class TradeFillService {
       `[order-flow] order status DB | sell ${orderRef(sellOrder.id, sellOrder.orderCode)} → ${sellOrder.status} matched=${sellOrder.matchedQty}/${sellOrder.quantity}`,
     );
 
+    const sellerPosForCost = await manager.findOne(Position, {
+      where: {
+        tradingAccountId: sellOrder.tradingAccountId,
+        stockId: sellOrder.stockId,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!sellerPosForCost) {
+      throw new Error('Không có position bên bán');
+    }
+    const costBasisPrice = Number(sellerPosForCost.avgPrice);
+    const realizedPnL = (px - costBasisPrice) * mq;
+
     const tradeRow = await manager.save(
       manager.create(Trade, {
         buyOrderId: buyOrder.id,
@@ -102,6 +118,8 @@ export class TradeFillService {
         quantity: mq,
         tradeValue,
         stockId: buyOrder.stockId,
+        costBasisPrice,
+        realizedPnL,
       }),
     );
     this.logger.log(
@@ -146,9 +164,7 @@ export class TradeFillService {
         walletId: buyerWallet.id,
         type: TransactionType.BUY_MATCHED,
         amount: -tradeValue,
-        balanceAfter:
-          Number(buyerWallet.availableBalance) +
-          Number(buyerWallet.lockedBalance),
+        ...walletLedgerSnapshot(buyerWallet),
         refOrderId: buyOrder.id,
         description: `Khớp mua ${mq} @ ${px}`,
       }),
@@ -158,9 +174,7 @@ export class TradeFillService {
         walletId: sellerWallet.id,
         type: TransactionType.SELL_MATCHED,
         amount: tradeValue,
-        balanceAfter:
-          Number(sellerWallet.availableBalance) +
-          Number(sellerWallet.lockedBalance),
+        ...walletLedgerSnapshot(sellerWallet),
         refOrderId: sellOrder.id,
         description: `Khớp bán ${mq} @ ${px}`,
       }),
@@ -176,26 +190,27 @@ export class TradeFillService {
       },
       lock: { mode: 'pessimistic_write' },
     });
-    const sellerPos = await manager.findOne(Position, {
-      where: {
-        tradingAccountId: sellOrder.tradingAccountId,
-        stockId: sellOrder.stockId,
-      },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!sellerPos) {
-      throw new Error('Không có position bên bán');
-    }
-
     // quantity đã trừ lúc đặt lệnh bán; khớp chỉ giảm phần phong tỏa
-    sellerPos.lockedQuantity = Math.max(
+    sellerPosForCost.lockedQuantity = Math.max(
       0,
-      Number(sellerPos.lockedQuantity) - mq,
+      Number(sellerPosForCost.lockedQuantity) - mq,
     );
-    await manager.save(Position, sellerPos);
+    await manager.save(Position, sellerPosForCost);
     this.logger.log(
-      `[order-flow] DB save | table=positions id=${sellerPos.id} role=seller qty=${sellerPos.quantity} lockedQty=${sellerPos.lockedQuantity}`,
+      `[order-flow] DB save | table=positions id=${sellerPosForCost.id} role=seller qty=${sellerPosForCost.quantity} lockedQty=${sellerPosForCost.lockedQuantity}`,
     );
+    await recordPositionLedger(manager, {
+      tradingAccountId: sellOrder.tradingAccountId,
+      stockId: sellOrder.stockId,
+      type: StockLedgerType.SELL_MATCHED,
+      quantityDelta: 0,
+      lockedDelta: -mq,
+      quantityAfter: Number(sellerPosForCost.quantity),
+      lockedAfter: Number(sellerPosForCost.lockedQuantity),
+      refOrderId: sellOrder.id,
+      refTradeId: tradeRow.id,
+      description: `Khớp bán ${mq} @ ${px}`,
+    });
 
     const oldQty = buyerPos ? Number(buyerPos.quantity) : 0;
     const oldAvg = buyerPos ? Number(buyerPos.avgPrice) : 0;
@@ -214,6 +229,18 @@ export class TradeFillService {
       this.logger.log(
         `[order-flow] DB save | table=positions id=${buyerPos.id} role=buyer qty=${buyerPos.quantity} avgPrice=${buyerPos.avgPrice}`,
       );
+      await recordPositionLedger(manager, {
+        tradingAccountId: buyOrder.tradingAccountId,
+        stockId: buyOrder.stockId,
+        type: StockLedgerType.BUY_MATCHED,
+        quantityDelta: mq,
+        lockedDelta: 0,
+        quantityAfter: Number(buyerPos.quantity),
+        lockedAfter: Number(buyerPos.lockedQuantity),
+        refOrderId: buyOrder.id,
+        refTradeId: tradeRow.id,
+        description: `Khớp mua ${mq} @ ${px}`,
+      });
     } else {
       const newPos = await manager.save(
         manager.create(Position, {
@@ -227,6 +254,18 @@ export class TradeFillService {
       this.logger.log(
         `[order-flow] DB save | table=positions id=${newPos.id} role=buyer qty=${newPos.quantity} avgPrice=${newPos.avgPrice} (new)`,
       );
+      await recordPositionLedger(manager, {
+        tradingAccountId: buyOrder.tradingAccountId,
+        stockId: buyOrder.stockId,
+        type: StockLedgerType.BUY_MATCHED,
+        quantityDelta: mq,
+        lockedDelta: 0,
+        quantityAfter: Number(newPos.quantity),
+        lockedAfter: 0,
+        refOrderId: buyOrder.id,
+        refTradeId: tradeRow.id,
+        description: `Khớp mua ${mq} @ ${px}`,
+      });
     }
 
     const sym = (symbol ?? '').trim().toUpperCase();

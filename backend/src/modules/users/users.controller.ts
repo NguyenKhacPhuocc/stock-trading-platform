@@ -60,7 +60,13 @@ export class UsersController {
     @CurrentUser() user: { id: string },
     @Query() query: AuditHistoryQueryDto,
   ) {
-    return this.users.listLoginHistory(user.id, query.from, query.to);
+    return this.users.listLoginHistory(
+      user.id,
+      query.from,
+      query.to,
+      query.limit,
+      query.offset,
+    );
   }
 
   @Get('me/profile-change-history')
@@ -68,6 +74,12 @@ export class UsersController {
     @CurrentUser() user: { id: string },
     @Query() query: AuditHistoryQueryDto,
   ) {
-    return this.users.listProfileChangeHistory(user.id, query.from, query.to);
+    return this.users.listProfileChangeHistory(
+      user.id,
+      query.from,
+      query.to,
+      query.limit,
+      query.offset,
+    );
   }
 }

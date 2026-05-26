@@ -16,7 +16,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
 
   if (isHydratingSession || !isReady) {
     return (
-      <div className="flex flex-1 items-center justify-center text-[12px] text-muted">
+      <div className="flex flex-1 items-center justify-center text-sm text-muted">
         Đang tải...
       </div>
     );

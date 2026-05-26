@@ -8,6 +8,9 @@ import { TradingAccount } from '../../database/entities/trading-account.entity';
 import { Stock } from '../../database/entities/stock.entity';
 import { StockBoardSnapshot } from '../../database/entities/stock-board-snapshot.entity';
 import { CashTransaction } from '../../database/entities/cash-transaction.entity';
+import { Trade } from '../../database/entities/trade.entity';
+import { PositionTransaction } from '../../database/entities/position-transaction.entity';
+import { Order } from '../../database/entities/order.entity';
 
 @Module({
   imports: [
@@ -18,6 +21,9 @@ import { CashTransaction } from '../../database/entities/cash-transaction.entity
       Stock,
       StockBoardSnapshot,
       CashTransaction,
+      Trade,
+      PositionTransaction,
+      Order,
     ]),
   ],
   providers: [WalletService],

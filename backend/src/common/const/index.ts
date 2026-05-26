@@ -4,6 +4,7 @@ export * from './trading-order';
 export * from './trading-account';
 export * from './kyc-status';
 export * from './ledger';
+export * from './stock-ledger';
 export * from './notification';
 export * from './cache-keys';
 export * from './config';

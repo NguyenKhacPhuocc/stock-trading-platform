@@ -23,6 +23,9 @@ import type { PreCheckOrderResult } from './dto/pre-check-order-result.dto';
 import { MatchingService } from '../matching/matching.service';
 import { formatCreateOrder, orderRef } from '../matching/util/order-flow-log.util';
 import { BusinessException } from '../../common/errors/business.exception';
+import { walletLedgerSnapshot } from '../../common/utils/wallet-ledger-snapshot.util';
+import { StockLedgerType } from '../../common/const/stock-ledger';
+import { recordPositionLedger } from '../../common/utils/record-position-ledger.util';
 import type { AppErrorKey } from '../../common/errors/error-const';
 import { isMakOrderType, resolveMakLimitPrice } from './util/mak-order.util';
 import { RedisService } from '../../redis/redis.service';
@@ -33,6 +36,7 @@ import {
   type StoredOrderIntent,
 } from './util/order-intent.util';
 import { resolveTradingAccountForUser } from '../../common/utils/resolve-trading-account.util';
+import { vnDateRangeToUtcBounds } from '../../common/utils/vn-time.util';
 
 /**
  * Đặt / hủy lệnh — ghi DB + khóa tài sản, rồi đẩy job khớp.
@@ -141,9 +145,7 @@ export class OrdersService {
                 walletId: wallet.id,
                 type: TransactionType.BUY_LOCK,
                 amount: -estimatedCost,
-                balanceAfter:
-                  Number(wallet.availableBalance) +
-                  Number(wallet.lockedBalance),
+                ...walletLedgerSnapshot(wallet),
                 refOrderId: persisted.id,
                 description: `Khóa tiền cho lệnh ${persisted.orderCode ?? persisted.id}${isMak ? ' (MAK)' : ''}`,
               }),
@@ -159,10 +161,11 @@ export class OrdersService {
           if (availableQty < Number(dto.quantity)) {
             this.throwBusinessError('INSUFFICIENT_SELLABLE_QTY');
           }
+          const sellQty = Number(dto.quantity);
           if (position) {
-            position.quantity = availableQty - Number(dto.quantity);
+            position.quantity = availableQty - sellQty;
             position.lockedQuantity =
-              Number(position.lockedQuantity) + Number(dto.quantity);
+              Number(position.lockedQuantity) + sellQty;
             await manager.save(position);
           }
 
@@ -176,7 +179,21 @@ export class OrdersService {
             price: orderPrice,
             quantity: dto.quantity,
           });
-          return manager.save(order);
+          const persisted = await manager.save(order);
+          if (position) {
+            await recordPositionLedger(manager, {
+              tradingAccountId: account.id,
+              stockId: dto.stockId,
+              type: StockLedgerType.SELL_LOCK,
+              quantityDelta: -sellQty,
+              lockedDelta: sellQty,
+              quantityAfter: Number(position.quantity),
+              lockedAfter: Number(position.lockedQuantity),
+              refOrderId: persisted.id,
+              description: `Phong tỏa bán ${sellQty} CP — lệnh ${persisted.orderCode ?? persisted.id}`,
+            });
+          }
+          return persisted;
         });
         this.logger.log(
           `[order-flow] order saved DB | ${orderRef(saved.id, saved.orderCode)} status=${saved.status}`,
@@ -206,25 +223,87 @@ export class OrdersService {
     );
   }
 
-  async getUserOrders(userId: string, tradingAccountId: string) {
+  async getUserOrders(
+    userId: string,
+    tradingAccountId: string,
+    opts?: {
+      from?: string;
+      to?: string;
+      limitRaw?: string;
+      offsetRaw?: string;
+      status?: string;
+      symbol?: string;
+    },
+  ) {
     const account = await resolveTradingAccountForUser(
       this.accountRepo,
       userId,
       tradingAccountId,
     );
-    const orders = await this.orderRepo.find({
-      where: { tradingAccountId: account.id },
-      relations: { stock: true, tradingAccount: true },
-      order: { createdAt: 'DESC' },
-    });
-    if (orders.length === 0) return [];
+    const limit = Math.min(
+      200,
+      Math.max(1, opts?.limitRaw ? parseInt(opts.limitRaw, 10) || 30 : 30),
+    );
+    const offset = Math.max(
+      0,
+      opts?.offsetRaw ? parseInt(opts.offsetRaw, 10) || 0 : 0,
+    );
+
+    const qb = this.orderRepo
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.stock', 'stock')
+      .leftJoinAndSelect('o.tradingAccount', 'tradingAccount')
+      .where('o.tradingAccountId = :aid', { aid: account.id })
+      .orderBy('o.createdAt', 'DESC');
+
+    const range = vnDateRangeToUtcBounds(opts?.from, opts?.to);
+    if (range.start) {
+      qb.andWhere('o.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('o.createdAt <= :end', { end: range.end });
+    }
+
+    const statusKey = opts?.status?.trim();
+    if (statusKey === 'active') {
+      qb.andWhere('o.status IN (:...active)', {
+        active: ['pending', 'partial'],
+      });
+    } else if (statusKey === 'filled') {
+      qb.andWhere('o.status = :filled', { filled: 'filled' });
+    } else if (statusKey === 'cancelled') {
+      qb.andWhere('o.status IN (:...cancelled)', {
+        cancelled: ['cancelled', 'partial_cancelled', 'rejected'],
+      });
+    }
+
+    const sym = opts?.symbol?.trim().toUpperCase();
+    if (sym) {
+      qb.andWhere('UPPER(stock.symbol) LIKE :sym', { sym: `%${sym}%` });
+    }
+
+    const [orders, total] = await qb
+      .take(limit)
+      .skip(offset)
+      .getManyAndCount();
+
+    if (orders.length === 0) {
+      return { accountId: account.accountId, items: [], total, limit, offset };
+    }
+
     const avgMap = await this.avgMatchedPriceByOrderIds(
       orders.map((o) => o.id),
     );
-    return orders.map((o) => ({
-      ...o,
-      avgMatchedPrice: avgMap.get(o.id) ?? null,
-    }));
+    return {
+      accountId: account.accountId,
+      items: orders.map((o) => ({
+        ...o,
+        avgMatchedPrice: avgMap.get(o.id) ?? null,
+      })),
+      total,
+      limit,
+      offset,
+    };
   }
 
   /** Giá khớp TB = Σ(price×qty) / Σ(qty) từ mọi trade của lệnh (mua hoặc bán). */
@@ -326,8 +405,7 @@ export class OrdersService {
             walletId: wallet.id,
             type: TransactionType.BUY_UNLOCK,
             amount: lockedAmount,
-            balanceAfter:
-              Number(wallet.availableBalance) + Number(wallet.lockedBalance),
+            ...walletLedgerSnapshot(wallet),
             refOrderId: order.id,
             description: `Mở khóa tiền khi hủy lệnh ${order.orderCode ?? order.id}`,
           }),
@@ -344,6 +422,17 @@ export class OrdersService {
             Number(position.lockedQuantity) - remainingQty,
           );
           await manager.save(position);
+          await recordPositionLedger(manager, {
+            tradingAccountId: account.id,
+            stockId: order.stockId,
+            type: StockLedgerType.SELL_UNLOCK,
+            quantityDelta: remainingQty,
+            lockedDelta: -remainingQty,
+            quantityAfter: Number(position.quantity),
+            lockedAfter: Number(position.lockedQuantity),
+            refOrderId: order.id,
+            description: `Hủy lệnh bán — hoàn ${remainingQty} CP`,
+          });
         }
       }
 

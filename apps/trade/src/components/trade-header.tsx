@@ -35,7 +35,7 @@ function SettingsTripleRow({
 }) {
   return (
     <div
-      className={`grid grid-cols-3 items-center gap-0 px-2 py-2 text-[12px] ${className}`.trim()}
+      className={`grid grid-cols-3 items-center gap-0 px-2 py-2 text-sm ${className}`.trim()}
     >
       <span className="justify-self-start text-left text-muted">{title}</span>
       {options.map((opt) => (
@@ -207,13 +207,13 @@ export default function TradeHeader() {
               </button>
             </>
           ) : (
-            <div className="flex items-center gap-2 text-[12px]">
+            <div className="flex items-center gap-2 text-sm">
               {activeTradingAccounts.length > 0 ? (
                 <div className="relative" ref={tradingMenuRef}>
                   <button
                     type="button"
                     onClick={() => setTradingMenuOpen((o) => !o)}
-                    className="flex items-center gap-1 rounded border px-2 py-1 font-mono text-[12px]"
+                    className="flex items-center gap-1 rounded border px-2 py-1 font-mono text-sm"
                     style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
                     aria-expanded={tradingMenuOpen}
                     aria-haspopup="listbox"
@@ -236,7 +236,7 @@ export default function TradeHeader() {
                             type="button"
                             role="option"
                             aria-selected={a.id === selectedTradingAccountId}
-                            className="flex w-full cursor-pointer items-center gap-[10px] px-3 py-2 text-left font-mono text-[12px] hover:bg-surface-2"
+                            className="flex w-full cursor-pointer items-center gap-[10px] px-3 py-2 text-left font-mono text-sm hover:bg-surface-2"
                             style={{ color: 'var(--foreground)' }}
                             onClick={() => {
                               dispatch(setSelectedTradingAccountId(a.id));
@@ -254,7 +254,7 @@ export default function TradeHeader() {
                   )}
                 </div>
               ) : (
-                <span className="font-mono text-[12px] text-muted">{user.custId}</span>
+                <span className="font-mono text-sm text-muted">{user.custId}</span>
               )}
 
               <NotificationBell />
@@ -273,7 +273,7 @@ export default function TradeHeader() {
                 </button>
                 {userMenuOpen && (
                   <div
-                    className="absolute right-0 z-50 mt-1 w-[17rem] rounded border py-2 text-[12px] shadow-lg"
+                    className="absolute right-0 z-50 mt-1 w-[17rem] rounded border py-2 text-sm shadow-lg"
                     style={{
                       borderColor: 'var(--border)',
                       background: 'var(--surface)',

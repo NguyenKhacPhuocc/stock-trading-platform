@@ -1,11 +1,7 @@
 import Link from 'next/link';
 import type { PortfolioPositionRow } from '@/hooks/use-portfolio-overview';
-import {
-  formatPercent,
-  formatSignedVnd,
-  formatVnd,
-  pnlColorClass,
-} from '@/lib/portfolio-format';
+import { formatPercent, pnlColorClass } from '@/lib/portfolio-format';
+import { VndAmount } from '@/components/portfolio/vnd-amount';
 
 type PortfolioPositionsTableProps = {
   positions: PortfolioPositionRow[];
@@ -32,13 +28,14 @@ export function PortfolioPositionsTable({ positions }: PortfolioPositionsTablePr
               <th className="px-2 py-2 text-right font-medium">Lãi/lỗ (chưa TH)</th>
               <th className="px-2 py-2 text-right font-medium">% Lãi/lỗ</th>
               <th className="px-2 py-2 text-right font-medium">Lãi/lỗ ngày</th>
+              <th className="px-2 py-2 text-right font-medium">% ngày</th>
               <th className="px-2 py-2 text-center font-medium">Đặt lệnh</th>
             </tr>
           </thead>
           <tbody>
             {positions.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-2 py-10 text-center text-muted">
+                <td colSpan={13} className="px-2 py-10 text-center text-muted">
                   Chưa có cổ phiếu trong danh mục.
                 </td>
               </tr>
@@ -63,23 +60,32 @@ export function PortfolioPositionsTable({ positions }: PortfolioPositionsTablePr
                     <td className="px-2 py-2 text-right tabular-nums font-medium">
                       {row.totalQuantity.toLocaleString('vi-VN')}
                     </td>
-                    <td className="px-2 py-2 text-right tabular-nums">
-                      {formatVnd(row.avgPrice)}
+                    <td className="px-2 py-2 text-right">
+                      <VndAmount amount={row.avgPrice} size="xs" />
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${dayCls}`}>
-                      {formatVnd(row.marketPrice)}
+                    <td className={`px-2 py-2 text-right ${dayCls}`}>
+                      <VndAmount amount={row.marketPrice} size="xs" className={dayCls} />
                     </td>
-                    <td className="px-2 py-2 text-right tabular-nums">
-                      {formatVnd(row.marketValue)}
+                    <td className="px-2 py-2 text-right">
+                      <VndAmount amount={row.marketValue} size="xs" />
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${pnlCls}`}>
-                      {formatSignedVnd(row.unrealizedPnL)}
+                    <td className={`px-2 py-2 text-right ${pnlCls}`}>
+                      <VndAmount
+                        amount={row.unrealizedPnL}
+                        signed
+                        size="xs"
+                        className={pnlCls}
+                      />
                     </td>
                     <td className={`px-2 py-2 text-right tabular-nums ${pnlCls}`}>
                       {formatPercent(row.unrealizedPnLPercent)}
                     </td>
+                    <td className={`px-2 py-2 text-right ${dayCls}`}>
+                      <VndAmount amount={row.dayPnL} signed size="xs" className={dayCls} />
+                    </td>
                     <td className={`px-2 py-2 text-right tabular-nums ${dayCls}`}>
-                      {formatSignedVnd(row.dayPnL)}
+                      {row.dayChangePercent > 0 ? '+' : ''}
+                      {row.dayChangePercent.toFixed(2)}%
                     </td>
                     <td className="px-2 py-2 text-center">
                       <Link
