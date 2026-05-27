@@ -53,6 +53,8 @@ export const GATEWAY_WALLET = {
   cashStatement: `${WALLET_GW}/cash-statement`,
   stockStatement: `${WALLET_GW}/stock-statement`,
   sellFills: `${WALLET_GW}/sell-fills`,
+  accountTrades: `${WALLET_GW}/account-trades`,
+  navHistory: `${WALLET_GW}/nav-history`,
 } as const;
 
 // ─── Notifications gateway paths ──────────────────────────────────────────────

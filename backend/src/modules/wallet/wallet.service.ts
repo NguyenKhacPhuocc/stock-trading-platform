@@ -17,9 +17,11 @@ import type {
 import type { CashStatementDto } from './dto/cash-statement.dto';
 import type { StockStatementDto } from './dto/stock-statement.dto';
 import type { SellFillsDto } from './dto/sell-fills.dto';
+import type { AccountTradesDto } from './dto/account-trades.dto';
 import { PositionTransaction } from '../../database/entities/position-transaction.entity';
 import { Order } from '../../database/entities/order.entity';
 import { backfillPositionLedgerForAccount } from './util/position-ledger-backfill.util';
+import { PortfolioNavSnapshot } from '../../database/entities/portfolio-nav-snapshot.entity';
 import { StockLedgerType } from '../../common/const/stock-ledger';
 import { recordPositionLedger } from '../../common/utils/record-position-ledger.util';
 import { resolveTradingAccountForUser } from '../../common/utils/resolve-trading-account.util';
@@ -58,6 +60,8 @@ export class WalletService {
     private positionTxRepo: Repository<PositionTransaction>,
     @InjectRepository(Order)
     private orderRepo: Repository<Order>,
+    @InjectRepository(PortfolioNavSnapshot)
+    private navSnapshotRepo: Repository<PortfolioNavSnapshot>,
     private readonly config: ConfigService,
   ) {}
 
@@ -470,6 +474,118 @@ export class WalletService {
     };
   }
 
+  async getAccountTrades(
+    userId: string,
+    tradingAccountId: string,
+    fromDate?: string,
+    toDate?: string,
+    limitRaw?: string,
+    offsetRaw?: string,
+    symbol?: string,
+  ): Promise<AccountTradesDto> {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
+    const limit = Math.max(1, Math.min(100, Number(limitRaw) || 20));
+    const offset = Math.max(0, Number(offsetRaw) || 0);
+    const range = vnDateRangeToUtcBounds(fromDate, toDate);
+
+    const sumQb = this.tradeRepo
+      .createQueryBuilder('t')
+      .leftJoin('t.buyOrder', 'buy')
+      .leftJoin('t.sellOrder', 'sell')
+      .where(
+        '(buy.tradingAccountId = :aid OR sell.tradingAccountId = :aid)',
+        { aid: account.id },
+      );
+    if (range.start) {
+      sumQb.andWhere('t.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      sumQb.andWhere('t.createdAt <= :end', { end: range.end });
+    }
+    if (symbol?.trim()) {
+      sumQb
+        .leftJoin('buy.stock', 'stockBuy')
+        .leftJoin('sell.stock', 'stockSell')
+        .andWhere(
+          '(UPPER(stockBuy.symbol) = :sym OR UPPER(stockSell.symbol) = :sym)',
+          { sym: symbol.trim().toUpperCase() },
+        );
+    }
+
+    const sumRaw = await sumQb
+      .select('COUNT(*)', 'tradeCount')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN buy.tradingAccountId = '${account.id}' THEN t.trade_value ELSE 0 END), 0)`,
+        'totalBuyValue',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN sell.tradingAccountId = '${account.id}' THEN t.trade_value ELSE 0 END), 0)`,
+        'totalSellValue',
+      )
+      .getRawOne<{
+        tradeCount: string;
+        totalBuyValue: string;
+        totalSellValue: string;
+      }>();
+
+    const qb = this.tradeRepo
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.buyOrder', 'buy')
+      .leftJoinAndSelect('t.sellOrder', 'sell')
+      .leftJoinAndSelect('buy.stock', 'stockBuy')
+      .leftJoinAndSelect('sell.stock', 'stockSell')
+      .where(
+        '(buy.tradingAccountId = :aid OR sell.tradingAccountId = :aid)',
+        { aid: account.id },
+      )
+      .orderBy('t.createdAt', 'DESC');
+
+    if (range.start) {
+      qb.andWhere('t.createdAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('t.createdAt <= :end', { end: range.end });
+    }
+    if (symbol?.trim()) {
+      qb.andWhere(
+        '(UPPER(stockBuy.symbol) = :sym OR UPPER(stockSell.symbol) = :sym)',
+        { sym: symbol.trim().toUpperCase() },
+      );
+    }
+
+    const [rows, total] = await qb.take(limit).skip(offset).getManyAndCount();
+
+    return {
+      accountId: account.accountId,
+      items: rows.map((t) => {
+        const isBuyer = t.buyOrder?.tradingAccountId === account.id;
+        const side = isBuyer ? 'buy' : 'sell';
+        const stock = isBuyer ? t.buyOrder?.stock : t.sellOrder?.stock;
+        return {
+          id: t.id,
+          tradedAt: toUtcIsoString(t.createdAt),
+          symbol: stock?.symbol ?? '—',
+          side,
+          quantity: Number(t.quantity) || 0,
+          price: toNum(t.price),
+          tradeValue: toNum(t.tradeValue),
+        };
+      }),
+      total,
+      limit,
+      offset,
+      summary: {
+        tradeCount: Number(sumRaw?.tradeCount) || 0,
+        totalBuyValue: toNum(sumRaw?.totalBuyValue),
+        totalSellValue: toNum(sumRaw?.totalSellValue),
+      },
+    };
+  }
+
   async getPortfolioOverview(
     userId: string,
     tradingAccountId: string,
@@ -691,5 +807,116 @@ export class WalletService {
     this.logger.log(
       `Quà cổ phiếu ${symbol} x${giftQty} cho TK ${tradingAccountId} (position ${saved.id})`,
     );
+  }
+
+  async recordNavSnapshot(
+    tradingAccountId: string,
+    snapshotAt?: Date,
+  ): Promise<void> {
+    const timestamp = snapshotAt ?? new Date();
+
+    // Query wallet + positions trực tiếp, không cần user auth
+    const wallet = await this.walletRepo.findOne({
+      where: { tradingAccountId },
+    });
+    if (!wallet) {
+      this.logger.warn(`Wallet not found for TK ${tradingAccountId}`);
+      return;
+    }
+
+    const positions = await this.positionRepo.find({
+      where: { tradingAccountId },
+      relations: { stock: true },
+    });
+
+    const available = toNum(wallet.availableBalance);
+    const locked = toNum(wallet.lockedBalance);
+    const cashTotal = available + locked;
+
+    const activePositions = positions.filter(
+      (p) => toNum(p.quantity) + toNum(p.lockedQuantity) > 0,
+    );
+    const stockIds = activePositions.map((p) => p.stockId);
+    const snapByStock = await this.loadLatestSnapshots(stockIds);
+
+    let stockValue = 0;
+    let costBasis = 0;
+    let unrealizedPnL = 0;
+
+    for (const p of activePositions) {
+      const qty = toNum(p.quantity);
+      const lockedQty = toNum(p.lockedQuantity);
+      const totalQty = qty + lockedQty;
+      const avgPrice = toNum(p.avgPrice);
+      const snap = snapByStock.get(p.stockId);
+      const refPrice = snap ? toNum(snap.referencePrice) : avgPrice;
+      const lastPrice = snap ? toNum(snap.lastPrice) : refPrice;
+      const marketPrice =
+        lastPrice > 0 ? lastPrice : refPrice > 0 ? refPrice : avgPrice;
+
+      const posStockValue = totalQty * marketPrice;
+      const posCost = totalQty * avgPrice;
+
+      stockValue += posStockValue;
+      costBasis += posCost;
+      unrealizedPnL += posStockValue - posCost;
+    }
+
+    const nav = cashTotal + stockValue;
+
+    await this.navSnapshotRepo.save({
+      tradingAccountId,
+      snapshotAt: timestamp,
+      nav,
+      cashTotal,
+      stockValue,
+      unrealizedPnL,
+    });
+
+    this.logger.log(
+      `Ghi snapshot NAV ${nav.toLocaleString()} cho TK ${tradingAccountId}`,
+    );
+  }
+
+  async getNavHistory(
+    userId: string,
+    tradingAccountId: string,
+    fromDate?: string,
+    toDate?: string,
+    limitRaw?: string,
+  ) {
+    const account = await resolveTradingAccountForUser(
+      this.accountRepo,
+      userId,
+      tradingAccountId,
+    );
+    const limit = Math.max(1, Math.min(500, Number(limitRaw) || 100));
+    const range = vnDateRangeToUtcBounds(fromDate, toDate);
+
+    const qb = this.navSnapshotRepo
+      .createQueryBuilder('s')
+      .where('s.tradingAccountId = :aid', { aid: account.id })
+      .orderBy('s.snapshotAt', 'ASC');
+
+    if (range.start) {
+      qb.andWhere('s.snapshotAt >= :start', { start: range.start });
+    }
+    if (range.end) {
+      qb.andWhere('s.snapshotAt <= :end', { end: range.end });
+    }
+
+    const rows = await qb.take(limit).getMany();
+
+    return {
+      accountId: account.accountId,
+      items: rows.map((s) => ({
+        snapshotAt: toUtcIsoString(s.snapshotAt),
+        nav: toNum(s.nav),
+        cashTotal: toNum(s.cashTotal),
+        stockValue: toNum(s.stockValue),
+        unrealizedPnL: toNum(s.unrealizedPnL),
+      })),
+      total: rows.length,
+    };
   }
 }

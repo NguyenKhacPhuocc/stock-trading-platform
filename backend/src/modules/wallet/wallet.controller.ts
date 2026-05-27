@@ -96,4 +96,42 @@ export class WalletController {
       offset,
     );
   }
+
+  @Get('account-trades')
+  getAccountTrades(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('symbol') symbol?: string,
+  ) {
+    return this.wallet.getAccountTrades(
+      user.id,
+      tradingAccountId,
+      from,
+      to,
+      limit,
+      offset,
+      symbol,
+    );
+  }
+
+  @Get('nav-history')
+  getNavHistory(
+    @CurrentUser() user: { id: string },
+    @Query('tradingAccountId', ParseUUIDPipe) tradingAccountId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.wallet.getNavHistory(
+      user.id,
+      tradingAccountId,
+      from,
+      to,
+      limit,
+    );
+  }
 }

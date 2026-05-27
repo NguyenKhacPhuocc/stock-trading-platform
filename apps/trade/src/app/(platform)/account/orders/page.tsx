@@ -4,10 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { AccountOrdersTable } from '@/components/account/account-orders-table';
+import { AccountTradesTable } from '@/components/account/account-trades-table';
 import { ListPagination } from '@/components/ui/list-pagination';
 import { mapOrderListItem } from '@/lib/order-list-map';
 import type { OrderListStatusFilter } from '@/lib/filter-orders';
-import { GATEWAY_ORDERS } from '@/lib/gateway-paths';
+import { GATEWAY_ORDERS, GATEWAY_WALLET } from '@/lib/gateway-paths';
 import {
   LIST_PAGE_SIZE,
   pageToOffset,
@@ -17,6 +18,8 @@ import { withTradingAccountQuery } from '@/lib/trading-account-query';
 import { useAppSelector } from '@/store/hooks';
 import { useRequireAuth } from '@/hooks/use-require-auth';
 
+type Tab = 'orders' | 'trades';
+
 export default function AccountOrdersPage() {
   const { handleSessionExpired } = useRequireAuth();
   const selectedTradingAccountId = useAppSelector((s) => s.auth.selectedTradingAccountId);
@@ -24,34 +27,58 @@ export default function AccountOrdersPage() {
   const selectedAccount = tradingAccounts.find((a) => a.id === selectedTradingAccountId);
   const accountIdLabel = selectedAccount?.accountId ?? '--';
 
+  const [activeTab, setActiveTab] = useState<Tab>('orders');
+
   const [orders, setOrders] = useState<ReturnType<typeof mapOrderListItem>[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
+  const [ordersTotal, setOrdersTotal] = useState(0);
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<OrderListStatusFilter>('all');
-  const [symbolFilter, setSymbolFilter] = useState('');
-  const [symbolDebounced, setSymbolDebounced] = useState('');
+  const [orderSymbolFilter, setOrderSymbolFilter] = useState('');
+  const [orderSymbolDebounced, setOrderSymbolDebounced] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  const [trades, setTrades] = useState<any[]>([]);
+  const [tradesTotal, setTradesTotal] = useState(0);
+  const [tradesPage, setTradesPage] = useState(1);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradeSymbolFilter, setTradeSymbolFilter] = useState('');
+  const [tradeSymbolDebounced, setTradeSymbolDebounced] = useState('');
+  const [tradeFromDate, setTradeFromDate] = useState('');
+  const [tradeToDate, setTradeToDate] = useState('');
 
   useEffect(() => {
-    const t = setTimeout(() => setSymbolDebounced(symbolFilter), 350);
+    const t = setTimeout(() => setOrderSymbolDebounced(orderSymbolFilter), 350);
     return () => clearTimeout(t);
-  }, [symbolFilter]);
+  }, [orderSymbolFilter]);
 
   useEffect(() => {
-    setPage(1);
-  }, [statusFilter, symbolDebounced]);
+    const t = setTimeout(() => setTradeSymbolDebounced(tradeSymbolFilter), 350);
+    return () => clearTimeout(t);
+  }, [tradeSymbolFilter]);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    setOrdersPage(1);
+  }, [statusFilter, orderSymbolDebounced, fromDate, toDate]);
+
+  useEffect(() => {
+    setTradesPage(1);
+  }, [tradeSymbolDebounced, tradeFromDate, tradeToDate]);
+
+  const loadOrders = useCallback(async () => {
     if (!selectedTradingAccountId) return;
-    setLoading(true);
+    setOrdersLoading(true);
     try {
       const base = withTradingAccountQuery(GATEWAY_ORDERS.list, selectedTradingAccountId);
       const qs = new URLSearchParams({
         limit: String(LIST_PAGE_SIZE),
-        offset: String(pageToOffset(page, LIST_PAGE_SIZE)),
+        offset: String(pageToOffset(ordersPage, LIST_PAGE_SIZE)),
       });
       if (statusFilter !== 'all') qs.set('status', statusFilter);
-      if (symbolDebounced.trim()) qs.set('symbol', symbolDebounced.trim());
+      if (orderSymbolDebounced.trim()) qs.set('symbol', orderSymbolDebounced.trim());
+      if (fromDate) qs.set('from', fromDate);
+      if (toDate) qs.set('to', toDate);
 
       const res = await fetch(`${base}&${qs.toString()}`, {
         credentials: 'same-origin',
@@ -66,23 +93,80 @@ export default function AccountOrdersPage() {
       }
       const parsed = parsePaginated<Record<string, unknown>>(json.d);
       setOrders(parsed.items.map((item) => mapOrderListItem(item)));
-      setTotal(parsed.total);
+      setOrdersTotal(parsed.total);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Lỗi tải dữ liệu');
     } finally {
-      setLoading(false);
+      setOrdersLoading(false);
     }
   }, [
     handleSessionExpired,
-    page,
+    ordersPage,
     selectedTradingAccountId,
     statusFilter,
-    symbolDebounced,
+    orderSymbolDebounced,
+    fromDate,
+    toDate,
+  ]);
+
+  const loadTrades = useCallback(async () => {
+    if (!selectedTradingAccountId) return;
+    setTradesLoading(true);
+    try {
+      const base = withTradingAccountQuery(GATEWAY_WALLET.accountTrades, selectedTradingAccountId);
+      const qs = new URLSearchParams({
+        limit: String(LIST_PAGE_SIZE),
+        offset: String(pageToOffset(tradesPage, LIST_PAGE_SIZE)),
+      });
+      if (tradeSymbolDebounced.trim()) qs.set('symbol', tradeSymbolDebounced.trim());
+      if (tradeFromDate) qs.set('from', tradeFromDate);
+      if (tradeToDate) qs.set('to', tradeToDate);
+
+      const res = await fetch(`${base}&${qs.toString()}`, {
+        credentials: 'same-origin',
+      });
+      const json = await res.json();
+      if (res.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      if (!res.ok || json?.s !== 'ok') {
+        throw new Error(json?.em || 'Không tải được lịch sử khớp');
+      }
+      const parsed = parsePaginated<Record<string, unknown>>(json.d);
+      setTrades(parsed.items);
+      setTradesTotal(parsed.total);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Lỗi tải dữ liệu');
+    } finally {
+      setTradesLoading(false);
+    }
+  }, [
+    handleSessionExpired,
+    tradesPage,
+    selectedTradingAccountId,
+    tradeSymbolDebounced,
+    tradeFromDate,
+    tradeToDate,
   ]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (activeTab === 'orders') {
+      void loadOrders();
+    } else {
+      void loadTrades();
+    }
+  }, [activeTab, loadOrders, loadTrades]);
+
+  const handleRefresh = () => {
+    if (activeTab === 'orders') {
+      void loadOrders();
+    } else {
+      void loadTrades();
+    }
+  };
+
+  const loading = activeTab === 'orders' ? ordersLoading : tradesLoading;
 
   return (
     <div className="space-y-4">
@@ -92,12 +176,12 @@ export default function AccountOrdersPage() {
           <p className="mt-1 text-sm text-muted">
             Tiểu khoản <span className="font-mono text-foreground">{accountIdLabel}</span>
             {' · '}
-            {LIST_PAGE_SIZE} lệnh/trang
+            {LIST_PAGE_SIZE} mục/trang
           </p>
         </div>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={handleRefresh}
           disabled={loading}
           className="rounded border border-border px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
         >
@@ -105,35 +189,121 @@ export default function AccountOrdersPage() {
         </button>
       </header>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as OrderListStatusFilter)}
-          className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-border">
+        <button
+          type="button"
+          onClick={() => setActiveTab('orders')}
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === 'orders'
+              ? 'border-b-2 border-primary text-primary'
+              : 'text-muted hover:text-foreground'
+          }`}
         >
-          <option value="all">Tất cả trạng thái</option>
-          <option value="active">Đang chờ / khớp dở</option>
-          <option value="filled">Đã khớp hết</option>
-          <option value="cancelled">Đã hủy / từ chối</option>
-        </select>
-        <input
-          type="text"
-          value={symbolFilter}
-          onChange={(e) => setSymbolFilter(e.target.value)}
-          placeholder="Lọc mã CK..."
-          className="w-32 rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm placeholder:text-muted"
-        />
+          Lịch sử đặt lệnh
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('trades')}
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === 'trades'
+              ? 'border-b-2 border-primary text-primary'
+              : 'text-muted hover:text-foreground'
+          }`}
+        >
+          Lịch sử khớp lệnh
+        </button>
       </div>
 
+      {/* Filters for Orders tab */}
+      {activeTab === 'orders' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as OrderListStatusFilter)}
+            className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+          >
+            <option value="all">Tất cả trạng thái</option>
+            <option value="active">Đang chờ / khớp dở</option>
+            <option value="filled">Đã khớp hết</option>
+            <option value="cancelled">Đã hủy / từ chối</option>
+          </select>
+          <input
+            type="text"
+            value={orderSymbolFilter}
+            onChange={(e) => setOrderSymbolFilter(e.target.value)}
+            placeholder="Lọc mã CK..."
+            className="w-32 rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm placeholder:text-muted"
+          />
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+            placeholder="Từ ngày"
+          />
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+            placeholder="Đến ngày"
+          />
+        </div>
+      )}
+
+      {/* Filters for Trades tab */}
+      {activeTab === 'trades' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={tradeSymbolFilter}
+            onChange={(e) => setTradeSymbolFilter(e.target.value)}
+            placeholder="Lọc mã CK..."
+            className="w-32 rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm placeholder:text-muted"
+          />
+          <input
+            type="date"
+            value={tradeFromDate}
+            onChange={(e) => setTradeFromDate(e.target.value)}
+            className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+            placeholder="Từ ngày"
+          />
+          <input
+            type="date"
+            value={tradeToDate}
+            onChange={(e) => setTradeToDate(e.target.value)}
+            className="rounded border border-border bg-[#11141b] px-2 py-1.5 text-sm text-foreground"
+            placeholder="Đến ngày"
+          />
+        </div>
+      )}
+
+      {/* Content */}
       <div className="overflow-hidden rounded-md border border-border bg-[#0b0d11]">
-        <AccountOrdersTable orders={orders} loading={loading} />
-        <ListPagination
-          page={page}
-          pageSize={LIST_PAGE_SIZE}
-          total={total}
-          onPageChange={setPage}
-          disabled={loading}
-        />
+        {activeTab === 'orders' ? (
+          <>
+            <AccountOrdersTable orders={orders} loading={ordersLoading} />
+            <ListPagination
+              page={ordersPage}
+              pageSize={LIST_PAGE_SIZE}
+              total={ordersTotal}
+              onPageChange={setOrdersPage}
+              disabled={ordersLoading}
+            />
+          </>
+        ) : (
+          <>
+            <AccountTradesTable trades={trades} loading={tradesLoading} />
+            <ListPagination
+              page={tradesPage}
+              pageSize={LIST_PAGE_SIZE}
+              total={tradesTotal}
+              onPageChange={setTradesPage}
+              disabled={tradesLoading}
+            />
+          </>
+        )}
       </div>
 
       <p className="text-xs text-muted">

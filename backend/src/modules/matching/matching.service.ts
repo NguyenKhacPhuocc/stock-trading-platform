@@ -26,6 +26,7 @@ import {
   TransactionType,
 } from '../../common/const';
 import { NotificationsService } from '../notifications/notifications.service';
+import { WalletService } from '../wallet/wallet.service';
 import { isMakOrderType } from '../orders/util/mak-order.util';
 import type { OrderFillNotify } from './dto/order-fill-notify.dto';
 import type {
@@ -72,6 +73,7 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
     @Inject(forwardRef(() => AppGateway))
     private readonly gateway: AppGateway,
     private readonly notifications: NotificationsService,
+    private readonly walletService: WalletService,
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
     @InjectRepository(Trade) private readonly tradeRepo: Repository<Trade>,
   ) {}
@@ -353,6 +355,31 @@ export class MatchingService implements OnModuleInit, OnModuleDestroy {
         lastMq = fills[fills.length - 1]?.quantity ?? 0;
         await this.emitOrderMatchedNotifies(fillResult.notifies);
         this.emitTradeTicks(stockId, fills);
+
+        const accountIds = new Set<string>();
+        accountIds.add(order.tradingAccountId);
+        for (const fill of fills) {
+          const buyOrd = await this.orderRepo.findOne({
+            where: { id: fill.buyOrderId },
+            select: ['tradingAccountId'],
+          });
+          const sellOrd = await this.orderRepo.findOne({
+            where: { id: fill.sellOrderId },
+            select: ['tradingAccountId'],
+          });
+          if (buyOrd) accountIds.add(buyOrd.tradingAccountId);
+          if (sellOrd) accountIds.add(sellOrd.tradingAccountId);
+        }
+
+        for (const accountId of accountIds) {
+          try {
+            await this.walletService.recordNavSnapshot(accountId);
+          } catch (err) {
+            this.logger.warn(
+              `Không ghi snapshot NAV cho TK ${accountId}: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+        }
       }
 
       const isMak = order.orderType === OrderType.MAK;

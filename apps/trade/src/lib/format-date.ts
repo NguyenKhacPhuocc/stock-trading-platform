@@ -57,6 +57,7 @@ const vnDateTimeFmt = new Intl.DateTimeFormat('en-GB', {
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
+  second: '2-digit',
   hour12: false,
 });
 
@@ -67,7 +68,7 @@ export function formatDateTimeVN(isoString: string | Date): string {
   const parts = vnDateTimeFmt.formatToParts(new Date(ms));
   const get = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((p) => p.type === type)?.value ?? '';
-  return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}`;
+  return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 export function formatDateTimeCompact(isoString: string | Date): string {

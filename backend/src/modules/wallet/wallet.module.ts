@@ -11,6 +11,7 @@ import { CashTransaction } from '../../database/entities/cash-transaction.entity
 import { Trade } from '../../database/entities/trade.entity';
 import { PositionTransaction } from '../../database/entities/position-transaction.entity';
 import { Order } from '../../database/entities/order.entity';
+import { PortfolioNavSnapshot } from '../../database/entities/portfolio-nav-snapshot.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { Order } from '../../database/entities/order.entity';
       Trade,
       PositionTransaction,
       Order,
+      PortfolioNavSnapshot,
     ]),
   ],
   providers: [WalletService],

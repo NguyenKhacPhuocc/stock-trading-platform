@@ -16,6 +16,7 @@ import { OrderbookWsService } from './orderbook-ws.service';
 import { WebsocketModule } from '../../websocket/websocket.module';
 import { MarketModule } from '../market/market.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
     forwardRef(() => WebsocketModule),
     forwardRef(() => MarketModule),
+    forwardRef(() => WalletModule),
   ],
   providers: [
     BookRegistry,

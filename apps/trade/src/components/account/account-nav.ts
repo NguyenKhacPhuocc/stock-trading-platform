@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   LineChart,
   PieChart,
+  TrendingUp,
 } from 'lucide-react';
 import type { SidebarNavGroup } from '@/components/sidebar';
 
@@ -27,6 +28,11 @@ export const ACCOUNT_NAV_GROUPS: SidebarNavGroup[] = [
         tabName: 'Lãi/lỗ đã thực hiện',
         href: '/account/pnl/realized',
         icon: LineChart,
+      },
+      {
+        tabName: 'Hiệu quả đầu tư',
+        href: '/account/performance',
+        icon: TrendingUp,
       },
     ],
   },

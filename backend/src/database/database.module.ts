@@ -22,6 +22,7 @@ import { AuditLog } from './entities/audit-log.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { StockBoardSnapshot } from './entities/stock-board-snapshot.entity';
 import { MarketSnapshotIngest } from './entities/market-snapshot-ingest.entity';
+import { PortfolioNavSnapshot } from './entities/portfolio-nav-snapshot.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -45,6 +46,7 @@ export const ALL_ENTITIES = [
   RefreshToken,
   StockBoardSnapshot,
   MarketSnapshotIngest,
+  PortfolioNavSnapshot,
 ];
 
 @Global()
